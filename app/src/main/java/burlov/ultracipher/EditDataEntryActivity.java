@@ -1,6 +1,8 @@
 package burlov.ultracipher;
 
 import android.app.Activity;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -22,6 +24,7 @@ public class EditDataEntryActivity extends Activity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         setContentView(R.layout.activity_edit_data_entry);
         textLabel = (TextView) findViewById(R.id.editEntryLabel);
         textTags = (TextView) findViewById(R.id.editEntryTags);
@@ -65,6 +68,10 @@ public class EditDataEntryActivity extends Activity {
                 break;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
     }
 
     private void acceptEdit() {
