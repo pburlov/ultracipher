@@ -2,61 +2,36 @@
 
     <item
         android:id="@+id/menuItemCreateEntry"
-        android:title="@string/new_entry"></item>
+        android:icon="@drawable/ic_action_new"
+        android:showAsAction="always"
+        android:title="@string/new_entry" />
     <item
         android:id="@+id/menuSync"
         android:title="@string/Sync">
         <menu>
             <item
-                android:id="@+id/itemBuySync"
-                android:title="@string/buy_sync_support" />
-            <item
                 android:id="@+id/menuItemDownloadData"
                 android:enabled="true"
-                android:title="@string/download_data"></item>
+                android:title="@string/download_data" />
             <item
                 android:id="@+id/menuItemUploadData"
                 android:enabled="true"
-                android:title="@string/upload_data"></item>
+                android:title="@string/upload_data" />
             <item
                 android:id="@+id/menuItemSyncAccount"
-                android:title="@string/menu_sync_account"></item>
+                android:title="@string/menu_sync_account" />
         </menu>
     </item>
     <item
-        android:id="@+id/menuSettings"
-        android:title="@string/menu_settings">
-        <menu>
-            <item
-                android:id="@+id/menuItemChangePassphrase"
-                android:title="@string/changePassphrase"></item>
-            <item
-                android:id="@+id/menuItemPerformance"
-                android:title="@string/performanceTest" />
-        </menu>
-    </item>
+        android:id="@+id/menuItemChangePassphrase"
+        android:title="@string/changePassphrase" />
+    <item
+        android:id="@+id/menuItemPerformance"
+        android:title="@string/performanceTest" />
     <item
         android:id="@+id/menuItemAbout"
         android:title="@string/about" />
     <item
-        android:id="@+id/menuKeyboard"
-        android:title="Keyboard">
-        <menu>
-            <item
-                android:id="@+id/menuItemKeyboardSystem"
-                android:checkable="true"
-                android:checked="true"
-                android:title="System"></item>
-            <item
-                android:id="@+id/menuItemKeyboardFuthark"
-                android:checkable="true"
-                android:checked="false"
-                android:title="Elder Futhark"></item>
-            <item
-                android:id="@+id/menuItemKeyboardAngloSaxon"
-                android:checkable="true"
-                android:checked="false"
-                android:title="Anglo-Saxon"></item>
-        </menu>
-    </item>
+        android:id="@+id/menuItemExit"
+        android:title="@string/exit" />
 </menu>

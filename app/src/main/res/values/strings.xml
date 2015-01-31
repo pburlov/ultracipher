@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Ultracipher Notebook</string>
+    <string name="app_name">Ultracipher</string>
     <string name="menu_sync_account">Sync account</string>
     <string name="clear">clear</string>
     <string name="new_entry">New entry</string>
@@ -18,8 +18,11 @@
     <string name="Sync">Sync</string>
     <string name="performanceTest">Performance index</string>
     <string name="about">About</string>
-    <string name="programInfo">Ultracipher Notebook 2.0\n© Copyright 2013 Paul Burlov. All rights reserved.\nVisit http://ultracipher.de\nThis product includes software developed by the Apache Software Foundation http://apache.org/</string>
-    <string name="buy_sync_support">Buy sync support</string>
-    <string name="no_billing_service">Billing service unavailable</string>
+    <string name="programInfo">Ultracipher\n© Copyright 2015 Paul Burlov. All rights reserved.\nVisit http://ultracipher.de\nThis product includes software developed by the Apache Software Foundation http://apache.org/</string>
     <string name="sync_not_enabled">Sync support not enabled</string>
+    <string name="exit">Exit</string>
+    <string name="Edit">Edit</string>
+    <string name="accept">Accept</string>
+    <string name="discard">Discard</string>
+    <string name="cancel">Cancel</string>
 </resources>

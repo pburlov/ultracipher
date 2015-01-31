@@ -58,21 +58,12 @@ public class SearchActivity extends Activity {
     //TODO wieder hoch setzten
     //	private static final KeyGenPerformanceLevel KEY_GEN_PERFORMANCE_LEVEL = new KeyGenPerformanceLevel(16, 8, 1);
     public final static String LOG_TAG = "Ultracipher";
-    static final int KEYBOARD_FUTHARK = 2;
-    static final int KEYBOARD_ANGLO_SAXON = 1;
-    static final int KEYBOARD_SYSTEM = 0;
-    static final String KEYBOARD_PREFERENCE = "keyboard";
     static final int DELETE_CONFIRMATION_DIALOG = 2;
-    private static final int INTENT_BUY_SYNC = 10001;
-    private static final int INTENT_EDIT_DATA_ENTRY = 2;
-    private static final String PRODUCT_SYNC = "sync";// "android.test.canceled";//
-    // "android.test.purchased";//
     private static final String US_ASCII = "US-ASCII";
     private static final String RECENT_LIST_FILE = "recentList.dat";
     private static final KeyGenPerformanceLevel KEY_GEN_PERFORMANCE_LEVEL = KeyGenPerformanceLevel.DEFAULT;// new KeyGenPerformanceLevel(16384, 8, 1);
     private static final String DATA_FILE = "ultracipher.dat";
     private static final String RECENT_ENTRIES_KEY = "RecentEntries";
-    protected boolean billingInitialized;
     private TextView searchField = null;
     private ListView listView;
     private Ultracipher core = new Ultracipher(null);
@@ -84,9 +75,6 @@ public class SearchActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // ...
-        String base64EncodedPublicKey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAg2++BY61DhZaMueHpFL7Wp1Ga8SakHP6tvoUYdwEuKM//6VdJiZUqvCvCKeUuRbJPRb5LNqGvKj3nmdHRv+yzZsz0Uj5cE9OZDS+u/gyE2d26YpRmyJNRMUUiaX45jjEkQz+FNpGcnQRBfMqKAV0HwrjeD8P5TPh14ftiaH6lY8jI8sRG4HRFkB0PCdf9N1sX1MO3VWJLMj0t5tuGkvacCfnyZYCuok/7dSZ3aDhptGOLCG07l8CpmxCm6LIyHQkRQHf5/CiQbot91H13ZdL8lti44HBVOj8E2Uin4VoEP+ZP84035s7bBmyagtG4WtGID6S5jmg828FQcinjMxFjwIDAQAB";
-        // compute your public key and store it in base64EncodedPublicKey
         recentEntries = loadRecentEntryList();
         setContentView(R.layout.search);
         searchField = (TextView) findViewById(R.id.searchField);
@@ -111,7 +99,7 @@ public class SearchActivity extends Activity {
 
             @Override
             public void onItemClick(AdapterView<?> arg0, View arg1, int pos, long id) {
-                editEntry((DataEntry) listView.getItemAtPosition(pos));
+                showEntry((DataEntry) listView.getItemAtPosition(pos));
             }
 
         });
@@ -197,32 +185,43 @@ public class SearchActivity extends Activity {
      */
     @Override
     public boolean onMenuItemSelected(int featureId, MenuItem item) {
-        if (item.getItemId() == R.id.menuItemCreateEntry) {
-            editEntry(new DataEntry());
-        } else if (item.getItemId() == R.id.menuItemChangePassphrase) {
-            initCryptor(new Function<Void>() {
-                @Override
-                public void apply(Void arg) {
-                    // Nach der Passwortaenderung Daten mit neuem Schluessel
-                    // speichern
-                    saveDatabaseLocalAsync();
-                }
-            }, true);
-        } else if (item.getItemId() == R.id.menuItemSyncAccount) {
-            createSyncAccountDialog(new Function<Void>() {
-                @Override
-                public void apply(Void arg) {
-                    saveDatabaseLocalAsync();
-                }
-            }).show();
-        } else if (item.getItemId() == R.id.menuItemDownloadData) {
-            downloadDataAsync(new EmptyFunction<Void>());
-        } else if (item.getItemId() == R.id.menuItemUploadData) {
-            uploadDataAsync();
-        } else if (item.getItemId() == R.id.menuItemPerformance) {
-            measurePerformanceAsync();
-        } else if (item.getItemId() == R.id.menuItemAbout) {
-            createMessageDialog(getResources().getString(R.string.programInfo)).show();
+        switch (item.getItemId()) {
+            case R.id.menuItemCreateEntry:
+                createNewDataEntry();
+                break;
+            case R.id.menuItemChangePassphrase:
+                initCryptor(new Function<Void>() {
+                    @Override
+                    public void apply(Void arg) {
+                        // Nach der Passwortaenderung Daten mit neuem Schluessel
+                        // speichern
+                        saveDatabaseLocalAsync();
+                    }
+                }, true);
+                break;
+            case R.id.menuItemSyncAccount:
+                createSyncAccountDialog(new Function<Void>() {
+                    @Override
+                    public void apply(Void arg) {
+                        saveDatabaseLocalAsync();
+                    }
+                }).show();
+                break;
+            case R.id.menuItemDownloadData:
+                downloadDataAsync(new EmptyFunction<Void>());
+                break;
+            case R.id.menuItemUploadData:
+                uploadDataAsync();
+                break;
+            case R.id.menuItemPerformance:
+                measurePerformanceAsync();
+                break;
+            case R.id.menuItemAbout:
+                createMessageDialog(getResources().getString(R.string.programInfo)).show();
+                break;
+            case R.id.menuItemExit:
+                this.finish();
+                break;
         }
         return super.onMenuItemSelected(featureId, item);
     }
@@ -260,13 +259,23 @@ public class SearchActivity extends Activity {
         asyncTask.execute(null, null);
     }
 
-    private void editEntry(DataEntry entry) {
+    private void createNewDataEntry() {
+        DataEntry entry = new DataEntry();
         Intent intent = new Intent(this, EditDataEntryActivity.class);
         intent.putExtra("entry", entry);
+        intent.putExtra("requestCode", EditDataEntryActivity.INTENT_NEW_DATA_ENTRY);
         addRecentSelectedItem(entry.getId());
-        startActivityForResult(intent, INTENT_EDIT_DATA_ENTRY);
+        startActivityForResult(intent, EditDataEntryActivity.INTENT_NEW_DATA_ENTRY);
     }
 
+    private void showEntry(DataEntry entry) {
+        Intent intent = new Intent(this, EditDataEntryActivity.class);
+        intent.putExtra("entry", entry);
+        intent.putExtra("requestCode", EditDataEntryActivity.INTENT_SHOW_DATA_ENTRY);
+        addRecentSelectedItem(entry.getId());
+        startActivityForResult(intent, EditDataEntryActivity.INTENT_SHOW_DATA_ENTRY);
+
+    }
     private void addRecentSelectedItem(String id) {
         if (id == null) {
             return;
@@ -426,21 +435,25 @@ public class SearchActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (resultCode != RESULT_OK) {
-            return;
-        }
         switch (requestCode) {
-            case INTENT_EDIT_DATA_ENTRY: {
+            case EditDataEntryActivity.INTENT_NEW_DATA_ENTRY:
+            case EditDataEntryActivity.INTENT_SHOW_DATA_ENTRY: {
+                if (data == null) {
+                    //hat sich nichts geaendert
+                    return;
+                }
                 DataEntry dataEntry = (DataEntry) data.getSerializableExtra("entry");
                 if (dataEntry == null) {
                     return;
                 }
-                if (dataEntry.getId() == null) {
+                if (dataEntry.getId() == null && (!dataEntry.getName().isEmpty() || !dataEntry.getTags().isEmpty() || !dataEntry.getText().isEmpty())) {
+                    //Nur dann speichern wenn irgendwas eingetragen wurde
                     DataEntry newEntry = core.getDatabase().addNewEntry(dataEntry);
                     Log.v(LOG_TAG, newEntry.toString());
                 } else {
                     DataEntry oldEntry = core.getDatabase().getEntryMap().get(dataEntry.getId());
-                    if (oldEntry != null) {
+                    if (oldEntry != null && !oldEntry.equals(dataEntry)) {
+                        //Nur dann speichern wenn der Eintrag geaendert wurde
                         oldEntry.setTags(dataEntry.getTags());
                         oldEntry.setName(dataEntry.getName());
                         oldEntry.setText(dataEntry.getText());
@@ -557,14 +570,13 @@ public class SearchActivity extends Activity {
     }
 
     @Override
-    public boolean onPrepareOptionsMenu(Menu menu) {
-        menu.clear();
+    public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.activity_search, menu);
         MenuItem item = menu.findItem(R.id.menuItemDownloadData);
         item.setEnabled(true);
         item = menu.findItem(R.id.menuItemUploadData);
         item.setEnabled(true);
-        return super.onPrepareOptionsMenu(menu);
+        return super.onCreateOptionsMenu(menu);
     }
 
     @Override

@@ -1,24 +1,20 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
 
     <item
-        android:id="@+id/menuKeyboard"
-        android:title="Keyboard">
-        <menu>
-            <item
-                android:id="@+id/menuItemKeyboardSystem"
-                android:checkable="true"
-                android:checked="true"
-                android:title="System"></item>
-            <item
-                android:id="@+id/menuItemKeyboardFuthark"
-                android:checkable="true"
-                android:checked="false"
-                android:title="Elder Futhark"></item>
-            <item
-                android:id="@+id/menuItemKeyboardAngloSaxon"
-                android:checkable="true"
-                android:checked="false"
-                android:title="Anglo-Saxon"></item>
-        </menu>
-    </item>
+        android:id="@+id/menuItemEdit"
+        android:icon="@drawable/ic_action_edit"
+        android:showAsAction="always"
+        android:title="@string/Edit"></item>
+    <item
+        android:id="@+id/menuItemEditCancel"
+        android:icon="@drawable/ic_action_cancel"
+        android:showAsAction="always"
+        android:title="@string/cancel"
+        android:visible="false"></item>
+    <item
+        android:id="@+id/menuItemEditAccept"
+        android:icon="@drawable/ic_action_accept"
+        android:showAsAction="always"
+        android:title="@string/accept"
+        android:visible="false"></item>
 </menu>
