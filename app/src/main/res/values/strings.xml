@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Ultracipher Notebook</string>
+    <string name="menu_sync_account">Sync account</string>
+    <string name="clear">clear</string>
+    <string name="new_entry">New entry</string>
+    <string name="menu_settings">Settings</string>
+    <string name="label_Label">Label</string>
+    <string name="label_Tags">Tags</string>
+    <string name="label_Data">Data</string>
+    <string name="delete">Delete</string>
+    <string name="delete_entry_confirmation">Delete entry?</string>
+    <string name="search">search</string>
+    <string name="changePassphrase">Change passphrase</string>
+    <string name="email_address">GMail or GMX Email address</string>
+    <string name="email_password">Email password</string>
+    <string name="download_data">Download data</string>
+    <string name="upload_data">Upload data</string>
+    <string name="Sync">Sync</string>
+    <string name="performanceTest">Performance index</string>
+    <string name="about">About</string>
+    <string name="programInfo">Ultracipher Notebook 2.0\n© Copyright 2013 Paul Burlov. All rights reserved.\nVisit http://ultracipher.de\nThis product includes software developed by the Apache Software Foundation http://apache.org/</string>
+    <string name="buy_sync_support">Buy sync support</string>
+    <string name="no_billing_service">Billing service unavailable</string>
+    <string name="sync_not_enabled">Sync support not enabled</string>
+</resources>

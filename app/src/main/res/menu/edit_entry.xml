@@ -1,0 +1,24 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:id="@+id/menuKeyboard"
+        android:title="Keyboard">
+        <menu>
+            <item
+                android:id="@+id/menuItemKeyboardSystem"
+                android:checkable="true"
+                android:checked="true"
+                android:title="System"></item>
+            <item
+                android:id="@+id/menuItemKeyboardFuthark"
+                android:checkable="true"
+                android:checked="false"
+                android:title="Elder Futhark"></item>
+            <item
+                android:id="@+id/menuItemKeyboardAngloSaxon"
+                android:checkable="true"
+                android:checked="false"
+                android:title="Anglo-Saxon"></item>
+        </menu>
+    </item>
+</menu>
