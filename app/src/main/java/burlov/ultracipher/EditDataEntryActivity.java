@@ -1,7 +1,6 @@
 package burlov.ultracipher;
 
 import android.app.Activity;
-import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -86,14 +85,34 @@ public class EditDataEntryActivity extends Activity {
     }
 
     private void switchToEditMode(boolean edit) {
-        textLabel.setEnabled(edit);
-        textLabel.setTextColor(Color.BLACK);
-        textData.setEnabled(edit);
-        textData.setTextColor(Color.BLACK);
-        textTags.setEnabled(edit);
-        textTags.setTextColor(Color.BLACK);
+        if (edit) {
+            if (textLabel.getKeyListener() == null) {
+                textLabel.setKeyListener((android.text.method.KeyListener) textLabel.getTag());
+            }
+            if (textData.getKeyListener() == null) {
+                textData.setKeyListener((android.text.method.KeyListener) textData.getTag());
+            }
+            if (textTags.getKeyListener() == null) {
+                textTags.setKeyListener((android.text.method.KeyListener) textTags.getTag());
+            }
+        } else {
+            //Remove KeyListener, so the colors does not changes and copy/paste works as always
+            if (textLabel.getKeyListener() != null) {
+                textLabel.setTag(textLabel.getKeyListener());
+                textLabel.setKeyListener(null);
+            }
+            if (textData.getKeyListener() != null) {
+                textData.setTag(textData.getKeyListener());
+                textData.setKeyListener(null);
+            }
+            if (textTags.getKeyListener() != null) {
+                textTags.setTag(textTags.getKeyListener());
+                textTags.setKeyListener(null);
+            }
+        }
         menuItemEdit.setVisible(!edit);
         menuItemEditAccept.setVisible(edit);
         menuItemEditCancel.setVisible(edit);
+
     }
 }
