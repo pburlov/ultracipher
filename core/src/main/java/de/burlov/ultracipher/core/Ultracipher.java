@@ -38,7 +38,7 @@ import de.burlov.ultracipher.core.mail.SupportedDomain;
  */
 public class Ultracipher {
     private static final String UTF_8 = "UTF-8";
-    private static final String PEM_TYPE = "UltraCipher_v1";
+    private static final String PEM_TYPE_V1 = "UltraCipher_v1";
     static private final String ZIP_ENTRY_DATA = "data";
     static private final String ZIP_ENTRY_EMAIL_CREDENTIALS = "email_account";
     static private final double BASE_PERFORMANCE = 1000;
@@ -96,14 +96,14 @@ public class Ultracipher {
         if (cryptor == null) {
             throw new Exception("Cryptor not initialized");
         }
-        String data = emailStore.loadData(syncCredentials, deleteSpam, getCurrentCryptor());
+        String data = emailStore.loadData(syncCredentials, deleteSpam);
         if (data == null) {
             return SyncResult.NoData;
         }
         EmailCredentials oldCredentials = syncCredentials;
         Database oldDatabase = database;
         String oldLocalDigest = database.computeChecksum();
-        importFromPemObject(data);
+        importFromPemObjectV1(data);
         String incomingDigest = database.computeChecksum();
         oldDatabase.merge(database);
         database = oldDatabase;
@@ -119,8 +119,8 @@ public class Ultracipher {
     }
 
     synchronized public void save(EmailCredentials creds) throws Exception {
-        String data = exportAsPemObject();
-        emailStore.saveData(creds, data, getCurrentCryptor());
+        String data = exportAsPemObjectV1();
+        emailStore.saveData(creds, data);
     }
 
     /**
@@ -132,14 +132,14 @@ public class Ultracipher {
     synchronized public void saveDatabase(File destination) throws Exception {
         OutputStream out = FileUtils.openOutputStream(destination);
         try {
-            String data = exportAsPemObject();
+            String data = exportAsPemObjectV1();
             IOUtils.write(data, out, "US-ASCII");
         } finally {
             IOUtils.closeQuietly(out);
         }
     }
 
-    synchronized public String exportAsPemObject() throws Exception {
+    synchronized public String exportAsPemObjectV1() throws Exception {
         if (cryptor == null) {
             throw new Exception("Cryptor not initialized");
         }
@@ -170,20 +170,20 @@ public class Ultracipher {
 
             @Override
             public PemObject generate() throws PemGenerationException {
-                return new PemObject(PEM_TYPE, encryptedData);
+                return new PemObject(PEM_TYPE_V1, encryptedData);
             }
         });
         pemWriter.close();
         return sWriter.toString();
     }
 
-    synchronized public void importFromPemObject(String data) throws Exception {
+    synchronized public void importFromPemObjectV1(String data) throws Exception {
         if (cryptor == null) {
             throw new Exception("Cryptor not initialized");
         }
         PemReader pemReader = new PemReader(new StringReader(data));
         PemObject pemObject = pemReader.readPemObject();
-        if (pemObject == null || pemObject.getContent().length == 0 || !PEM_TYPE.equals(pemObject.getType())) {
+        if (pemObject == null || pemObject.getContent().length == 0 || !PEM_TYPE_V1.equals(pemObject.getType())) {
             throw new Exception("Invalid file");
         }
         byte[] encryptedData = pemObject.getContent();
@@ -228,7 +228,7 @@ public class Ultracipher {
     synchronized public void loadDatabase(File source) throws Exception {
         InputStream in = FileUtils.openInputStream(source);
         try {
-            importFromPemObject(IOUtils.toString(in, "US-ASCII"));
+            importFromPemObjectV1(IOUtils.toString(in, "US-ASCII"));
         } finally {
             IOUtils.closeQuietly(in);
         }

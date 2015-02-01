@@ -7,8 +7,6 @@ package de.burlov.ultracipher.core.mail;
 import java.io.PrintWriter;
 import java.util.List;
 
-import de.burlov.ultracipher.core.ICryptor;
-
 public interface IMailHandler {
 
     /**
@@ -24,7 +22,7 @@ public interface IMailHandler {
      * @param data
      * @throws java.io.IOException
      */
-    public void storeData(EmailCredentials creds, String data, ICryptor cryptor) throws Exception;
+    public void storeData(EmailCredentials creds, String data) throws Exception;
 
     /**
      * Holt aktuellste Daten-Email ab
@@ -33,7 +31,7 @@ public interface IMailHandler {
      * @return
      * @throws java.io.IOException
      */
-    public String retrieveData(EmailCredentials creds, boolean deleteData, ICryptor cryptor) throws Exception;
+    public String retrieveData(EmailCredentials creds, boolean deleteData) throws Exception;
 
     public void setDebugWriter(PrintWriter writer);
 }

@@ -13,7 +13,6 @@ import org.apache.commons.net.pop3.POP3MessageInfo;
 import org.apache.commons.net.pop3.POP3SClient;
 import org.apache.commons.net.smtp.SMTPReply;
 import org.apache.commons.net.smtp.SimpleSMTPHeader;
-import org.apache.commons.net.util.Base64;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -32,12 +31,12 @@ import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-import de.burlov.ultracipher.core.ICryptor;
 import de.burlov.ultracipher.core.mail.AuthenticatingSMTPClient.AUTH_METHOD;
 
 class MailHandler {
     protected static final String TIMESTAMP_HEADER = "X-ULTRACIPHER-TIMESTAMP";
-    protected static final String HMAC_HEADER = "X-ULTRACIPHER-HMAC";
+    protected static final String ULTRACIPHER_VERSION = "X-ULTRACIPHER_VERSION";
+
     private PrintWriter debugWriter;
 
     protected MailHandler() {
@@ -86,12 +85,7 @@ class MailHandler {
         this.debugWriter = writer;
     }
 
-    private String computeMarkerString(ICryptor cryptor) throws Exception {
-        return Base64.encodeBase64URLSafeString(cryptor.hmac(HMAC_HEADER.getBytes("US-ASCII")));
-    }
-
-    protected void sendData(ServerParameters smtpParams, String sender, Collection<String> recipients, String data,
-                            ICryptor cryptor) throws Exception {
+    protected void sendData(ServerParameters smtpParams, String sender, Collection<String> recipients, String data) throws Exception {
         if (recipients.isEmpty()) {
             throw new IllegalArgumentException("no recipients");
         }
@@ -126,7 +120,7 @@ class MailHandler {
             SimpleSMTPHeader header = new SimpleSMTPHeader(sender, recipients.iterator().next(), "UltraCipher "
                     + DateFormat.getDateTimeInstance().format(new Date()));
             header.addHeaderField(TIMESTAMP_HEADER, Long.toHexString(System.currentTimeMillis()));
-            header.addHeaderField(HMAC_HEADER, computeMarkerString(cryptor));
+            header.addHeaderField(ULTRACIPHER_VERSION, "2");
             Writer writer = client.sendMessageData();
 
             if (writer != null) {
@@ -142,7 +136,7 @@ class MailHandler {
         }
     }
 
-    protected String retrieveDataIMAP(ServerParameters imapParams, ICryptor cryptor) throws Exception {
+    protected String retrieveDataIMAP(ServerParameters imapParams) throws Exception {
         AuthenticatingIMAPClient imap = new AuthenticatingIMAPClient(true);
         imap.setDefaultTimeout(10000);
         String ret = null;
@@ -161,7 +155,7 @@ class MailHandler {
             logStream(imap.getReplyStrings());
             GregorianCalendar cal = new GregorianCalendar();
             cal.add(Calendar.YEAR, -1);
-            if (!imap.search("HEADER " + HMAC_HEADER + " \"\" SINCE " + formatDate(cal.getTime()))) {
+            if (!imap.search("HEADER " + ULTRACIPHER_VERSION + " \"2\" SINCE " + formatDate(cal.getTime()))) {
                 throw new IOException("IMAP Search command failed: " + imap.getReplyString());
             }
             // imap.uid("SEARCH","HEADER "+TIMESTAMP_HEADER + " \"\"");

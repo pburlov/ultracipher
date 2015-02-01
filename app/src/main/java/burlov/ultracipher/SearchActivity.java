@@ -141,7 +141,7 @@ public class SearchActivity extends Activity {
         final String pem = loadPem();
         if (pem == null) {
             /*
-			 * Noch keine lokale Daten gespeichert, also
+             * Noch keine lokale Daten gespeichert, also
 			 * Passwortinitialisierungsdialog zeigen
 			 */
             initCryptor(null, true);
@@ -280,6 +280,7 @@ public class SearchActivity extends Activity {
         startActivityForResult(intent, EditDataEntryActivity.INTENT_SHOW_DATA_ENTRY);
 
     }
+
     private void addRecentSelectedItem(String id) {
         if (id == null) {
             return;
@@ -356,7 +357,7 @@ public class SearchActivity extends Activity {
                 try {
                     SyncResult result = core.syncDatabase(true);
                     if (result == SyncResult.IncomingChanges || result == SyncResult.OutgoingChanges) {
-                        String pem = core.exportAsPemObject();
+                        String pem = core.exportAsPemObjectV1();
                         savePem(pem);
                     }
                     return result;
@@ -525,9 +526,9 @@ public class SearchActivity extends Activity {
             @Override
             public View getView(int position, View convertView, ViewGroup parent) {
                 View ret = super.getView(position, convertView, parent);
-//				if (ret instanceof TextView) {
-//					((TextView) ret).setTypeface(CURRENT_FONT);
-//				}
+                //				if (ret instanceof TextView) {
+                //					((TextView) ret).setTypeface(CURRENT_FONT);
+                //				}
                 return ret;
             }
 
@@ -732,7 +733,7 @@ public class SearchActivity extends Activity {
             @Override
             protected String doInBackground(Void... params) {
                 try {
-                    return core.exportAsPemObject();
+                    return core.exportAsPemObjectV1();
                 } catch (Exception e) {
                     Log.e(LOG_TAG, e.toString());
                 }
@@ -798,7 +799,7 @@ public class SearchActivity extends Activity {
             @Override
             protected Exception doInBackground(Void... params) {
                 try {
-                    core.importFromPemObject(pemObject);
+                    core.importFromPemObjectV1(pemObject);
                 } catch (Exception e) {
                     Log.e(LOG_TAG, e.toString());
                     return e;

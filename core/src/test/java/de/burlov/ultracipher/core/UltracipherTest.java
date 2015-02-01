@@ -41,8 +41,8 @@ public class UltracipherTest {
                 e.setName(RandomStringUtils.randomAlphanumeric(rnd.nextInt(100) + 1));
                 e.setTags(RandomStringUtils.randomAlphanumeric(rnd.nextInt(100) + 1));
                 e.setText(RandomStringUtils.randomAlphanumeric(rnd.nextInt(100) + 1));
-                String data = uc.exportAsPemObject();
-                uc.importFromPemObject(data);
+                String data = uc.exportAsPemObjectV1();
+                uc.importFromPemObjectV1(data);
                 assertTrue(db.getEntries().containsAll(uc.getDatabase().getEntries()));
             }
         } finally {
@@ -76,11 +76,11 @@ public class UltracipherTest {
             assertTrue(db.getEntries().containsAll(uc.getDatabase().getEntries()));
             assertEquals(creds, uc.getSyncCredentials());
         }
-        String data = uc.exportAsPemObject();
+        String data = uc.exportAsPemObjectV1();
         {
             uc = new Ultracipher(new PrintWriter(System.out));
             uc.setCryptor(cryptor);
-            uc.importFromPemObject(data);
+            uc.importFromPemObjectV1(data);
             assertTrue(db.getEntries().containsAll(uc.getDatabase().getEntries()));
             assertEquals(creds, uc.getSyncCredentials());
         }
@@ -98,8 +98,8 @@ public class UltracipherTest {
             e.setName(RandomStringUtils.randomAlphanumeric(rnd.nextInt(100) + 1));
             e.setTags(RandomStringUtils.randomAlphanumeric(rnd.nextInt(100) + 1));
             e.setText(RandomStringUtils.randomAlphanumeric(rnd.nextInt(100) + 1));
-            String data = uc.exportAsPemObject();
-            uc.importFromPemObject(data);
+            String data = uc.exportAsPemObjectV1();
+            uc.importFromPemObjectV1(data);
             assertTrue(db.getEntries().containsAll(uc.getDatabase().getEntries()));
         }
         uc.save(creds);

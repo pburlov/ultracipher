@@ -11,8 +11,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import de.burlov.ultracipher.core.ICryptor;
-
 /**
  * High Level API fuer Email-Backend
  *
@@ -48,22 +46,22 @@ public class EmailStore {
      * @return
      * @throws Exception
      */
-    public String loadData(EmailCredentials credentials, boolean deleteSpam, ICryptor cryptor) throws Exception {
+    public String loadData(EmailCredentials credentials, boolean deleteSpam) throws Exception {
         IMailHandler handler = findResponsibleHandler(credentials.getEmailaddress());
         if (handler == null) {
             throw new Exception("not supported domain: " + credentials.getDomainPart());
         }
         handler.setDebugWriter(log);
-        return handler.retrieveData(credentials, deleteSpam, cryptor);
+        return handler.retrieveData(credentials, deleteSpam);
     }
 
-    public void saveData(EmailCredentials credentials, String data, ICryptor cryptor) throws Exception {
+    public void saveData(EmailCredentials credentials, String data) throws Exception {
         IMailHandler handler = findResponsibleHandler(credentials.getEmailaddress());
         if (handler == null) {
             throw new Exception("not supported domain: " + credentials.getDomainPart());
         }
         handler.setDebugWriter(log);
-        handler.storeData(credentials, data, cryptor);
+        handler.storeData(credentials, data);
     }
 
     /**

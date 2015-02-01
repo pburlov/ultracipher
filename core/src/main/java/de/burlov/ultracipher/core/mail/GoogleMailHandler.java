@@ -7,8 +7,6 @@ package de.burlov.ultracipher.core.mail;
 import java.util.Arrays;
 import java.util.List;
 
-import de.burlov.ultracipher.core.ICryptor;
-
 /**
  * Bei Gmail werden per POP3 aufgerufen Nachrichten nur 30 Tage lang zum
  * wiedeholten Abruf gehalten
@@ -21,14 +19,14 @@ import de.burlov.ultracipher.core.ICryptor;
 public class GoogleMailHandler extends MailHandler implements IMailHandler {
 
     @Override
-    public void storeData(EmailCredentials creds, String data, ICryptor cryptor) throws Exception {
+    public void storeData(EmailCredentials creds, String data) throws Exception {
         sendData(new ServerParameters("smtp.googlemail.com", 465, creds.getEmailaddress(), creds.getPassword(), true), creds.getEmailaddress(),
-                Arrays.asList(creds.getEmailaddress()), data, cryptor);
+                Arrays.asList(creds.getEmailaddress()), data);
     }
 
     @Override
-    public String retrieveData(EmailCredentials creds, boolean deleteSpam, ICryptor cryptor) throws Exception {
-        return retrieveDataIMAP(new ServerParameters("imap.googlemail.com", 993, creds.getEmailaddress(), creds.getPassword(), true), cryptor);
+    public String retrieveData(EmailCredentials creds, boolean deleteSpam) throws Exception {
+        return retrieveDataIMAP(new ServerParameters("imap.googlemail.com", 993, creds.getEmailaddress(), creds.getPassword(), true));
     }
 
     @Override
