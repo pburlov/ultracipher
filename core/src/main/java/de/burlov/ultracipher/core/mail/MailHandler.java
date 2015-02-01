@@ -45,7 +45,7 @@ class MailHandler {
     }
 
     static private String formatDate(Date date) {
-//		SimpleDateFormat format = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss Z");
+        //		SimpleDateFormat format = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss Z");
         SimpleDateFormat format = new SimpleDateFormat("dd-MMM-yyyy", Locale.US);
         return format.format(date);
     }
@@ -161,7 +161,7 @@ class MailHandler {
             logStream(imap.getReplyStrings());
             GregorianCalendar cal = new GregorianCalendar();
             cal.add(Calendar.YEAR, -1);
-            if (!imap.search("HEADER " + HMAC_HEADER + " \"" + computeMarkerString(cryptor) + "\" SINCE " + formatDate(cal.getTime()))) {
+            if (!imap.search("HEADER " + HMAC_HEADER + " \"\" SINCE " + formatDate(cal.getTime()))) {
                 throw new IOException("IMAP Search command failed: " + imap.getReplyString());
             }
             // imap.uid("SEARCH","HEADER "+TIMESTAMP_HEADER + " \"\"");
@@ -247,7 +247,7 @@ class MailHandler {
             }
             if (deleteSpam && readedTimestamp == null) {
                 /*
-				 * Alle nicht erkannte Nachrichten loeschen
+                 * Alle nicht erkannte Nachrichten loeschen
 				 */
                 pop3.deleteMessage(msginfo.number);
             }

@@ -20,7 +20,9 @@ import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 import de.burlov.ultracipher.core.bouncycastle.crypto.BlockCipher;
@@ -305,4 +307,14 @@ public class DeepCascadeCryptor implements ICryptor {
         }
         keys.clear();
     }
+
+    @Override
+    public Map<String, String> getParameters() {
+        HashMap<String, String> map = new HashMap<>();
+        map.put("N", Integer.toString(N));
+        map.put("p", Integer.toString(p));
+        map.put("r", Integer.toString(r));
+        return map;
+    }
+
 }

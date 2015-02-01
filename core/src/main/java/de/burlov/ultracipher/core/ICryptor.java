@@ -17,6 +17,8 @@
  */
 package de.burlov.ultracipher.core;
 
+import java.util.Map;
+
 /**
  * Created 08.07.2009
  *
@@ -33,4 +35,6 @@ public interface ICryptor {
      * Loescht sensitive Schluesseldaten
      */
     public void clear();
+
+    public Map<String, String> getParameters();
 }
