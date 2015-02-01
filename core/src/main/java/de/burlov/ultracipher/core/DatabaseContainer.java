@@ -98,23 +98,8 @@ public class DatabaseContainer {
             DatabaseEntry dbe = new DatabaseEntry((String) jo.get("data"));
             dbe.name = (String) jo.get("name");
             dbe.hidden = (Boolean) jo.get("hidden");
+            dbe.cryptorParams = (Map<String, String>) jo.get("cryptor-params");
             return dbe;
-        }
-
-        public void decrypt(ICryptor cryptor) throws Exception {
-            PemReader pr = new PemReader(new StringReader(rawData));
-            PemObject pemObject = pr.readPemObject();
-            byte[] encryptedContent = pemObject.getContent();
-            byte[] plainContent = cryptor.decrypt(encryptedContent);
-            GZIPInputStream gzipIn = new GZIPInputStream(new ByteArrayInputStream(plainContent));
-            ByteArrayOutputStream bout = new ByteArrayOutputStream();
-            IOUtils.copy(gzipIn, bout);
-            Arrays.fill(plainContent, (byte) 0);
-            plainContent = bout.toByteArray();
-            Database db = new Database();
-            db.importJson(new String(plainContent, UTF_8));
-            this.database = db;
-            this.cryptor = cryptor;
         }
 
         JSONObject saveToJson() throws Exception {
@@ -140,7 +125,25 @@ public class DatabaseContainer {
             jo.put("data", encryptedString);
             jo.put("name", name);
             jo.put("hidden", hidden);
+            jo.put("cryptor-params", cryptor.getParameters());
             return jo;
         }
+
+        public void decrypt(ICryptor cryptor) throws Exception {
+            PemReader pr = new PemReader(new StringReader(rawData));
+            PemObject pemObject = pr.readPemObject();
+            byte[] encryptedContent = pemObject.getContent();
+            byte[] plainContent = cryptor.decrypt(encryptedContent);
+            GZIPInputStream gzipIn = new GZIPInputStream(new ByteArrayInputStream(plainContent));
+            ByteArrayOutputStream bout = new ByteArrayOutputStream();
+            IOUtils.copy(gzipIn, bout);
+            Arrays.fill(plainContent, (byte) 0);
+            plainContent = bout.toByteArray();
+            Database db = new Database();
+            db.importJson(new String(plainContent, UTF_8));
+            this.database = db;
+            this.cryptor = cryptor;
+        }
+
     }
 }

@@ -10,6 +10,11 @@ import de.burlov.ultracipher.core.bouncycastle.crypto.params.KeyParameter;
 import de.burlov.ultracipher.core.bouncycastle.crypto.util.Pack;
 import de.burlov.ultracipher.core.bouncycastle.util.Arrays;
 
+/**
+ * Extended version of the bouncycastle.crypto.generators.SCrypt classes.
+ *
+ * This version supports IProgressListener interface
+ */
 public class SCrypt {
     private final IProgressListener progressListener;
 
@@ -21,7 +26,6 @@ public class SCrypt {
         this.progressListener = progressListener;
     }
 
-    // TODO Validate arguments
     public byte[] generate(byte[] P, byte[] S, int N, int r, int p, int dkLen) {
         return MFcrypt(P, S, N, r, p, dkLen);
     }

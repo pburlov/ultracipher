@@ -33,5 +33,6 @@ public class DatabaseContainerTest {
         Assert.assertEquals("db-name", loadedEntry.name);
         Assert.assertEquals(true, loadedEntry.hidden);
         Assert.assertEquals(db.computeChecksum(), loadedEntry.database.computeChecksum());
+        Assert.assertEquals(cr.getParameters(), loadedEntry.cryptorParams);
     }
 }
