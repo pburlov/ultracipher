@@ -27,7 +27,6 @@ import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemObject;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemObjectGenerator;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemReader;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemWriter;
-import de.burlov.ultracipher.core.json.JSONException;
 import de.burlov.ultracipher.core.mail.EmailCredentials;
 import de.burlov.ultracipher.core.mail.EmailStore;
 import de.burlov.ultracipher.core.mail.SupportedDomain;
@@ -202,7 +201,7 @@ public class Ultracipher {
             if (StringUtils.equalsIgnoreCase(ZIP_ENTRY_EMAIL_CREDENTIALS, zipEntry.getName())) {
                 try {
                     loadedCreds = EmailCredentials.importJson(IOUtils.toString(zin, UTF_8));
-                } catch (JSONException e) {
+                } catch (Exception e) {
                     log.println(e.toString());
                 }
             }

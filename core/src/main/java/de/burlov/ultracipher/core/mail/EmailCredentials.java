@@ -5,13 +5,11 @@
 package de.burlov.ultracipher.core.mail;
 
 import org.apache.commons.lang3.StringUtils;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 
 import java.io.Serializable;
-
-import de.burlov.ultracipher.core.json.JSONException;
-import de.burlov.ultracipher.core.json.JSONObject;
-import de.burlov.ultracipher.core.json.JSONStringer;
-import de.burlov.ultracipher.core.json.JSONTokener;
+import java.util.Map;
 
 public class EmailCredentials implements Serializable {
     private static final String KEY_PASSWORD = "password";
@@ -32,11 +30,10 @@ public class EmailCredentials implements Serializable {
         this.password = password;
     }
 
-    static public EmailCredentials importJson(String json) throws JSONException {
-        JSONTokener t = new JSONTokener(json);
-        JSONObject obj = (JSONObject) t.nextValue();
-        String address = obj.getString(KEY_ADDRESS);
-        String password = obj.getString(KEY_PASSWORD);
+    static public EmailCredentials importJson(String json) throws Exception {
+        Map<String, String> map = (Map<String, String>) JSONValue.parse(json);
+        String address = map.get(KEY_ADDRESS);
+        String password = map.get(KEY_PASSWORD);
         return new EmailCredentials(address, password);
     }
 
@@ -62,15 +59,11 @@ public class EmailCredentials implements Serializable {
         return StringUtils.substringBeforeLast(emailaddress, "@");
     }
 
-    public String exportJson() throws JSONException {
-        JSONStringer stringer = new JSONStringer();
-        stringer.object();
-        stringer.key(KEY_ADDRESS);
-        stringer.value(emailaddress);
-        stringer.key(KEY_PASSWORD);
-        stringer.value(password);
-        stringer.endObject();
-        return stringer.toString();
+    public String exportJson() {
+        JSONObject jo = new JSONObject();
+        jo.put(KEY_ADDRESS, emailaddress);
+        jo.put(KEY_PASSWORD, password);
+        return jo.toJSONString();
     }
 
     @Override

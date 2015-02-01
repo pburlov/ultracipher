@@ -1,6 +1,9 @@
 package de.burlov.ultracipher.core;
 
 import org.apache.commons.io.IOUtils;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -17,9 +20,6 @@ import java.util.zip.GZIPOutputStream;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemObject;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemReader;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemWriter;
-import de.burlov.ultracipher.core.json.JSONArray;
-import de.burlov.ultracipher.core.json.JSONException;
-import de.burlov.ultracipher.core.json.JSONObject;
 
 /**
  * Created by Paul Burlov on 01.02.2015.
@@ -37,10 +37,10 @@ public class DatabaseContainer {
             throw new IOException("Invalid file");
         }
         String content = new String(pemObject.getContent(), UTF_8);
-        JSONObject jo = new JSONObject(content);
-        JSONArray ja = jo.getJSONArray("entries");
-        for (int i = 0; i < ja.length(); i++) {
-            JSONObject o = ja.getJSONObject(i);
+        Map jo = (Map) JSONValue.parse(content);
+        List ja = (List) jo.get("entries");
+        for (int i = 0; i < ja.size(); i++) {
+            Map o = (Map) ja.get(i);
             DatabaseEntry dbe = DatabaseEntry.loadFromJson(o);
             databaseContainer.entries.add(dbe);
         }
@@ -52,7 +52,7 @@ public class DatabaseContainer {
         JSONArray ja = new JSONArray();
         jo.put("entries", ja);
         for (DatabaseEntry entry : entries) {
-            ja.put(entry.saveToJson());
+            ja.add(entry.saveToJson());
         }
         byte[] bytes = jo.toString().getBytes(UTF_8);
         StringWriter sw = new StringWriter();
@@ -94,10 +94,10 @@ public class DatabaseContainer {
             this.rawData = rawData;
         }
 
-        static DatabaseEntry loadFromJson(JSONObject jo) throws JSONException {
-            DatabaseEntry dbe = new DatabaseEntry(jo.getString("data"));
-            dbe.name = jo.getString("name");
-            dbe.hidden = jo.getBoolean("hidden");
+        static DatabaseEntry loadFromJson(Map jo) {
+            DatabaseEntry dbe = new DatabaseEntry((String) jo.get("data"));
+            dbe.name = (String) jo.get("name");
+            dbe.hidden = (Boolean) jo.get("hidden");
             return dbe;
         }
 

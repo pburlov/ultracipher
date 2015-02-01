@@ -18,12 +18,15 @@
 package de.burlov.ultracipher.core;
 
 import org.apache.commons.lang3.StringUtils;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONValue;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,10 +39,6 @@ import au.com.bytecode.opencsv.CSVWriter;
 import de.burlov.ultracipher.core.bouncycastle.crypto.digests.RIPEMD160Digest;
 import de.burlov.ultracipher.core.bouncycastle.crypto.io.DigestOutputStream;
 import de.burlov.ultracipher.core.bouncycastle.util.encoders.Hex;
-import de.burlov.ultracipher.core.json.JSONArray;
-import de.burlov.ultracipher.core.json.JSONObject;
-import de.burlov.ultracipher.core.json.JSONStringer;
-import de.burlov.ultracipher.core.json.JSONTokener;
 
 /**
  * Dataholder of entire database data
@@ -179,32 +178,31 @@ public class Database {
      * @throws Exception
      */
     public void importJson(String json) throws Exception {
-        JSONTokener t = new JSONTokener(json);
         TreeMap<String, DataEntry> newEntries = new TreeMap<String, DataEntry>();
-        JSONArray rootArray = (JSONArray) t.nextValue();
-		/*
+        List rootArray = (List) JSONValue.parse(json);
+        /*
 		 * Primaere Daten laden
 		 */
-        JSONArray array = rootArray.getJSONArray(0);
-        for (int i = 0; i < array.length(); i++) {
-            JSONObject o = array.getJSONObject(i);
-            DataEntry e = new DataEntry(o.getString(ID));
-            e.setLastChanged(o.getLong(CHANGED));
-            e.setName(o.getString(NAME));
-            e.setTags(o.getString(TAGS));
-            e.setText(o.getString(TEXT));
+        List array = (List) rootArray.get(0);
+        for (int i = 0; i < array.size(); i++) {
+            Map o = (Map) array.get(i);
+            DataEntry e = new DataEntry((String) o.get(ID));
+            e.setLastChanged(((Number) o.get(CHANGED)).longValue());
+            e.setName((String) o.get(NAME));
+            e.setTags((String) o.get(TAGS));
+            e.setText((String) o.get(TEXT));
 
             newEntries.put(e.getId(), e);
         }
 		/*
 		 * Ids der geloeschten Elemente laden
 		 */
-        array = rootArray.getJSONArray(1);
+        array = (List) rootArray.get(1);
         TreeMap<String, Long> deletedMap = new TreeMap<String, Long>();
-        for (int i = 0; i < array.length(); i++) {
-            JSONArray arr = array.getJSONArray(i);
-            String id = arr.getString(0);
-            Long time = arr.getLong(1);
+        for (int i = 0; i < array.size(); i++) {
+            List arr = (List) array.get(i);
+            String id = (String) arr.get(0);
+            Long time = ((Number) arr.get(1)).longValue();
             deletedMap.put(id, time);
         }
         this.entries = newEntries;
@@ -213,49 +211,38 @@ public class Database {
 
     /**
      * @return Daten als JSON String
-     * @throws de.burlov.ultracipher.core.json.JSONException
      * @throws Exception
      */
     public String exportJson() throws Exception {
-        JSONStringer stringer = new JSONStringer();
-        stringer.array();
-		/*
+        JSONArray rootArray = new JSONArray();
+        /*
 		 * Primaere Daten schreiben
 		 */
-        stringer.array();
+        List jsonEntries = new ArrayList<>();
+        rootArray.add(jsonEntries);
         for (DataEntry entry : entries.values()) {
-            stringer.object();
-            stringer.key(ID);
-            stringer.value(entry.getId());
-            stringer.key(CHANGED);
-            stringer.value(entry.getLastChanged());
-            stringer.key(NAME);
-            stringer.value(entry.getName());
-            stringer.key(TAGS);
-            stringer.value(entry.getTags());
-            stringer.key(TEXT);
-            stringer.value(entry.getText());
-            stringer.endObject();
+            Map map = new HashMap();
+            jsonEntries.add(map);
+            map.put(ID, entry.getId());
+            map.put(CHANGED, entry.getLastChanged());
+            map.put(NAME, entry.getName());
+            map.put(TAGS, entry.getTags());
+            map.put(TEXT, entry.getText());
         }
-        stringer.endArray();
 		/*
 		 * Liste mit IDs der geloeschte Elemente schreiben
 		 */
-        stringer.array();
+        jsonEntries = new ArrayList<>();
+        rootArray.add(jsonEntries);
         long thresholdTime = System.currentTimeMillis() - DELETE_ENTRIES_TTL;
         for (Entry<String, Long> entry : deletedEntries.entrySet()) {
             if (entry.getValue() < thresholdTime) {
                 // abgelaufene Eintraege gar nicht abspeichern
                 continue;
             }
-            stringer.array();
-            stringer.value(entry.getKey());
-            stringer.value(entry.getValue());
-            stringer.endArray();
+            jsonEntries.add(Arrays.asList(entry.getKey(), entry.getValue()));
         }
-        stringer.endArray();
-        stringer.endArray();
-        return stringer.toString();
+        return rootArray.toJSONString();
     }
 
     public Map<String, Long> getDeletedEntries() {
