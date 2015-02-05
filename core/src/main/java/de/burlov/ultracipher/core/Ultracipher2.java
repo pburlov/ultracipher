@@ -79,38 +79,41 @@ public class Ultracipher2 {
      * @throws Exception
      */
     synchronized public SyncResult syncDatabase(boolean deleteSpam) throws Exception {
-        if (syncCredentials == null) {
-            throw new Exception("Email provider credentials needed");
-        }
-        if (cryptor == null) {
-            throw new Exception("Cryptor not initialized");
-        }
-        String data = emailStore.loadData(syncCredentials, deleteSpam);
-        if (data == null) {
-            return SyncResult.NoData;
-        }
-        EmailCredentials oldCredentials = syncCredentials;
-        Database oldDatabase = database;
-        String oldLocalDigest = database.computeChecksum();
-        importFromPemObjectV1(data);
-        String incomingDigest = database.computeChecksum();
-        oldDatabase.merge(database);
-        database = oldDatabase;
-        String newLocalDigest = database.computeChecksum();
-        syncCredentials = oldCredentials;
-        if (!newLocalDigest.equals(incomingDigest)) {
-            return SyncResult.OutgoingChanges;
-        }
-        if (!oldLocalDigest.equals(newLocalDigest)) {
-            return SyncResult.IncomingChanges;
-        }
-        return SyncResult.NoChanges;
+        //TODO
+        return null;
+        //        if (syncCredentials == null) {
+        //            throw new Exception("Email provider credentials needed");
+        //        }
+        //        if (cryptor == null) {
+        //            throw new Exception("Cryptor not initialized");
+        //        }
+        //        String data = emailStore.loadData(syncCredentials, deleteSpam);
+        //        if (data == null) {
+        //            return SyncResult.NoData;
+        //        }
+        //        EmailCredentials oldCredentials = syncCredentials;
+        //        Database oldDatabase = database;
+        //        String oldLocalDigest = database.computeChecksum();
+        //        importFromPemObjectV1(data);
+        //        String incomingDigest = database.computeChecksum();
+        //        oldDatabase.merge(database);
+        //        database = oldDatabase;
+        //        String newLocalDigest = database.computeChecksum();
+        //        syncCredentials = oldCredentials;
+        //        if (!newLocalDigest.equals(incomingDigest)) {
+        //            return SyncResult.OutgoingChanges;
+        //        }
+        //        if (!oldLocalDigest.equals(newLocalDigest)) {
+        //            return SyncResult.IncomingChanges;
+        //        }
+        //        return SyncResult.NoChanges;
     }
 
     synchronized public void save(EmailCredentials creds) throws Exception {
-
-        String data = exportAsPemObjectV1();
-        emailStore.saveData(creds, data);
+        //TODO
+        //
+        //        String data = exportAsPemObjectV1();
+        //        emailStore.saveData(creds, data);
     }
 
     /**

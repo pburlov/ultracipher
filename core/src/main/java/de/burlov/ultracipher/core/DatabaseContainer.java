@@ -1,6 +1,7 @@
 package de.burlov.ultracipher.core;
 
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
@@ -16,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemObject;
 import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemReader;
@@ -26,16 +29,23 @@ import de.burlov.ultracipher.core.bouncycastle.util.io.pem.PemWriter;
  */
 public class DatabaseContainer {
     public static final String UTF_8 = "UTF-8";
-    private static final String PEM_TYPE = "UltraCipher_v2";
+    private static final String PEM_TYPE_V2 = "UltraCipher_v2";
+    private static final String PEM_TYPE_V1 = "UltraCipher_v1";
     private List<DatabaseEntry> entries = new ArrayList<>();
 
     public static DatabaseContainer loadFromString(String data) throws Exception {
-        DatabaseContainer databaseContainer = new DatabaseContainer();
         PemReader pemReader = new PemReader(new StringReader(data));
         PemObject pemObject = pemReader.readPemObject();
-        if (pemObject == null || pemObject.getContent().length == 0 || !PEM_TYPE.equals(pemObject.getType())) {
+        if (pemObject == null || pemObject.getContent().length == 0) {
             throw new IOException("Invalid file");
         }
+        if (PEM_TYPE_V1.equals(pemObject.getType())) {
+            return loadFromStringV1(data);
+        }
+        if (!PEM_TYPE_V2.equals(pemObject.getType())) {
+            throw new IOException("Unknown format version");
+        }
+        DatabaseContainer databaseContainer = new DatabaseContainer();
         String content = new String(pemObject.getContent(), UTF_8);
         Map jo = (Map) JSONValue.parse(content);
         List ja = (List) jo.get("entries");
@@ -44,6 +54,19 @@ public class DatabaseContainer {
             DatabaseEntry dbe = DatabaseEntry.loadFromJson(o);
             databaseContainer.entries.add(dbe);
         }
+        return databaseContainer;
+    }
+
+    /**
+     * Lädt Daten aus dem vorherigen Format
+     * @param data
+     * @return
+     */
+    private static DatabaseContainer loadFromStringV1(String data) {
+        DatabaseContainer databaseContainer = new DatabaseContainer();
+        DatabaseEntry dbe = new DatabaseEntry(data);
+        dbe.name = "default";
+        databaseContainer.entries.add(dbe);
         return databaseContainer;
     }
 
@@ -57,7 +80,7 @@ public class DatabaseContainer {
         byte[] bytes = jo.toString().getBytes(UTF_8);
         StringWriter sw = new StringWriter();
         PemWriter pemWriter = new PemWriter(sw);
-        PemObject pemObject = new PemObject(PEM_TYPE, bytes);
+        PemObject pemObject = new PemObject(PEM_TYPE_V2, bytes);
         pemWriter.writeObject(pemObject);
         pemWriter.close();
         return sw.toString();
@@ -83,6 +106,8 @@ public class DatabaseContainer {
     }
 
     public static class DatabaseEntry {
+        static private final String ZIP_ENTRY_DATA = "data";
+
         final String rawData;
         boolean hidden = false;
         String name;
@@ -116,7 +141,7 @@ public class DatabaseContainer {
                 Arrays.fill(data, (byte) 0);
                 StringWriter stringWriter = new StringWriter();
                 PemWriter pw = new PemWriter(stringWriter);
-                PemObject po = new PemObject("data", encryptedData);
+                PemObject po = new PemObject(PEM_TYPE_V2, encryptedData);
                 pw.writeObject(po);
                 pw.close();
                 encryptedString = stringWriter.toString();
@@ -132,6 +157,10 @@ public class DatabaseContainer {
         public void decrypt(ICryptor cryptor) throws Exception {
             PemReader pr = new PemReader(new StringReader(rawData));
             PemObject pemObject = pr.readPemObject();
+            if (PEM_TYPE_V1.equals(pemObject.getType())) {
+                decryptV1(cryptor);
+                return;
+            }
             byte[] encryptedContent = pemObject.getContent();
             byte[] plainContent = cryptor.decrypt(encryptedContent);
             GZIPInputStream gzipIn = new GZIPInputStream(new ByteArrayInputStream(plainContent));
@@ -143,6 +172,28 @@ public class DatabaseContainer {
             db.importJson(new String(plainContent, UTF_8));
             this.database = db;
             this.cryptor = cryptor;
+        }
+
+        void decryptV1(ICryptor cryptor) throws Exception {
+            PemReader pemReader = new PemReader(new StringReader(rawData));
+            PemObject pemObject = pemReader.readPemObject();
+            if (pemObject == null || pemObject.getContent().length == 0 || !PEM_TYPE_V1.equals(pemObject.getType())) {
+                throw new Exception("Invalid file");
+            }
+            byte[] encryptedData = pemObject.getContent();
+            byte[] plainData = cryptor.decrypt(encryptedData);
+            ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(plainData));
+            ZipEntry zipEntry = null;
+            Database loadedDb = null;
+            while ((zipEntry = zin.getNextEntry()) != null) {
+                if (StringUtils.equals(ZIP_ENTRY_DATA, zipEntry.getName())) {
+                    Database db = new Database();
+                    db.importJson(IOUtils.toString(zin, UTF_8));
+                    loadedDb = db;
+                }
+            }
+            Arrays.fill(plainData, (byte) 0);
+            database = loadedDb;
         }
 
     }
