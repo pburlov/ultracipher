@@ -2,7 +2,7 @@ apply plugin: 'java'
 apply plugin: 'application'
 
 mainClassName = "burlov.ultracipher.swing.SwingGuiApplication"
-
+applicationName = 'ultracipher'
 dependencies {
     compile project(':core')
     compile group: 'org.swinglabs', name: 'swingx', version: '1.6.1'
@@ -18,3 +18,4 @@ sourceSets {
         }
     }
 }
+
