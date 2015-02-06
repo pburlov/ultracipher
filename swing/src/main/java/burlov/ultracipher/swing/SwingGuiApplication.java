@@ -252,7 +252,7 @@ public class SwingGuiApplication {
                 case JOptionPane.NO_OPTION:
                     return true;
                 case JOptionPane.YES_OPTION:
-				/*
+                /*
 				 * Speichern anstossen
 				 */
                     saveDatabase();
@@ -276,7 +276,7 @@ public class SwingGuiApplication {
         while (true) {
             File dataFile = findDatabaseFile();
             if (dataFile == null) {
-                // Keine Daten in default Lokations vorhanden
+                // Keine Daten in default Locations vorhanden
                 return;
             }
             if (core.getCurrentCryptor() == null) {

@@ -41,7 +41,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -621,13 +620,8 @@ public class SearchActivity extends Activity {
     }
 
     private void _savePemInInternalStorage(String pem) throws Exception {
-        OutputStream out = openFileOutput(DATA_FILE, Context.MODE_PRIVATE);
-        try {
-            IOUtils.write(pem, out, US_ASCII);
-        } finally {
-            IOUtils.closeQuietly(out);
-        }
-        Log.i(LOG_TAG, "data saved to internal storage");
+        File dir = getFilesDir();
+        saveDatabase(new File(dir, DATA_FILE), pem);
     }
 
     private void _savePemInExternalStorage(String pem) throws Exception {
@@ -636,13 +630,7 @@ public class SearchActivity extends Activity {
             Log.i(LOG_TAG, "no external storage found");
             return;
         }
-        File file = getExternalStorageDataFile();
-        if (!file.exists()) {
-            file.getParentFile().mkdirs();
-            file.createNewFile();
-        }
-        FileUtils.write(file, pem, US_ASCII);
-        Log.i(LOG_TAG, "data saved to " + file.getAbsolutePath());
+        saveDatabase(getExternalStorageDataFile(), pem);
     }
 
     private File getExternalStorageDataFile() {
@@ -650,6 +638,43 @@ public class SearchActivity extends Activity {
         File file = new File(externalStorageDirectory, DATA_FILE);
         return file;
     }
+
+    /**
+     * Speichert aktuell geladene Datenbank in die angegebene Datei.
+     * Falls die Datei schon existiert, wird die alte Datei zur Sicherung umbenannt
+     *
+     * @param destination
+     * @throws java.io.IOException
+     */
+    synchronized public void saveDatabase(File destination, String data) throws Exception {
+        File temp = createTempFile(destination.getParentFile(), destination.getName());
+        if (destination.exists()) {
+            //Alte Datei sichern
+            Log.i(LOG_TAG, "Backup previous database as " + temp.getAbsolutePath());
+            FileUtils.moveFile(destination, temp);
+        }
+        try {
+            Log.i(LOG_TAG, "Write data to " + destination.getAbsolutePath());
+            FileUtils.write(destination, data, "US-ASCII");
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Write data failed", e);
+            Log.i(LOG_TAG, "Restore previous database from " + temp.getAbsolutePath());
+            //Gesicherte Datei wiederherstellen
+            FileUtils.deleteQuietly(destination);
+            FileUtils.moveFile(temp, destination);
+        }
+    }
+
+    File createTempFile(File dir, String baseName) {
+        File file = null;
+        long counter = System.currentTimeMillis();
+        do {
+            file = new File(dir, counter + "-" + baseName);
+            counter++;
+        } while (file.exists());
+        return file;
+    }
+
 
     /**
      * Zuerst versucht Daten von der externe Storage zu laden. Falls dies

@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import au.com.bytecode.opencsv.CSVReader;
 import au.com.bytecode.opencsv.CSVWriter;
@@ -50,7 +51,7 @@ import de.burlov.ultracipher.core.json.JSONTokener;
  */
 public class Database {
     // Definiert wie lange Information ueber geloeschte Eintraege gehalten wird
-    private static final long DELETE_ENTRIES_TTL = 1000 * 60 * 60 * 24 * 300;
+    private static final long DELETE_ENTRIES_TTL = TimeUnit.DAYS.toMillis(300);
     private static final String CHANGED = "changed";
     private static final String ID = "id";
     private static final String TEXT = "text";

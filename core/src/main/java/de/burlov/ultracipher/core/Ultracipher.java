@@ -11,8 +11,7 @@ import org.apache.commons.lang3.StringUtils;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
@@ -125,19 +124,39 @@ public class Ultracipher {
     }
 
     /**
-     * Speichert aktuell geladen Datenbank in die angegebene Datei
+     * Speichert aktuell geladene Datenbank in die angegebene Datei.
+     * Falls die Datei schon existiert, wird die alte Datei zur Sicherung umbenannt
      *
      * @param destination
      * @throws java.io.IOException
      */
     synchronized public void saveDatabase(File destination) throws Exception {
-        OutputStream out = FileUtils.openOutputStream(destination);
+        File temp = createTempFile(destination.getParentFile(), destination.getName());
+        if (destination.exists()) {
+            //Alte Datei sichern
+            log.println("Backup previous database as " + temp.getAbsolutePath());
+            FileUtils.moveFile(destination, temp);
+        }
         try {
             String data = exportAsPemObject();
-            IOUtils.write(data, out, "US-ASCII");
-        } finally {
-            IOUtils.closeQuietly(out);
+            FileUtils.write(destination, data, "US-ASCII");
+        } catch (IOException e) {
+            e.printStackTrace(log);
+            log.println("Restore previous database");
+            //Gesicherte Datei wiederherstellen
+            FileUtils.deleteQuietly(destination);
+            FileUtils.moveFile(temp, destination);
         }
+    }
+
+    File createTempFile(File dir, String baseName) {
+        File file = null;
+        long counter = System.currentTimeMillis();
+        do {
+            file = new File(dir, counter + "-" + baseName);
+            counter++;
+        } while (file.exists());
+        return file;
     }
 
     synchronized public String exportAsPemObject() throws Exception {
@@ -227,12 +246,8 @@ public class Ultracipher {
      * @throws java.io.IOException
      */
     synchronized public void loadDatabase(File source) throws Exception {
-        InputStream in = FileUtils.openInputStream(source);
-        try {
-            importFromPemObject(IOUtils.toString(in, "US-ASCII"));
-        } finally {
-            IOUtils.closeQuietly(in);
-        }
+        String data = FileUtils.readFileToString(source, "US-ASCII");
+        importFromPemObject(data);
     }
 
     /**
