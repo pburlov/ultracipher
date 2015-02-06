@@ -8,6 +8,9 @@
         android:minSdkVersion="15"
         android:targetSdkVersion="21" />
 
+    <!-- Needed for online sync -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Needed for write database to external sdcard -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <application
