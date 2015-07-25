@@ -645,7 +645,7 @@ public class SwingGuiApplication {
 
             @Override
             public void actionPerformed(ActionEvent e) {
-                String text = "<html>Ultracipher 6.1<br>(C) Copyright 2015 Paul Burlov<br><br>"
+                String text = "<html>Ultracipher 6.2<br>(C) Copyright 2015 Paul Burlov<br><br>"
                         + "Encryption strength: 768Bit (6 x 128Bit keys)<br>Cipher cascade: AES/Twofish/Serpent/CAST6/SEED/Camellia"
                         + "<br>Encryption mode: Two pass CBC"
                         + "<br>Key derivation algorithm: SCrypt with N=2^14,P=8,R=1<br><br> "
