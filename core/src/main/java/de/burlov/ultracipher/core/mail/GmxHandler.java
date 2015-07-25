@@ -26,6 +26,6 @@ public class GmxHandler extends MailHandler implements IMailHandler {
 
     @Override
     public List<SupportedDomain> getSupportedDomains() {
-        return Arrays.asList(new SupportedDomain("gmx.de", ""));
+        return Arrays.asList(new SupportedDomain("gmx.de", ""), new SupportedDomain("gmx.net", ""));
     }
 }

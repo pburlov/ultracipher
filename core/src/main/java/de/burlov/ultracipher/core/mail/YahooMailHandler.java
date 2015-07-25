@@ -19,8 +19,8 @@ public class YahooMailHandler extends MailHandler implements IMailHandler {
     }
 
     @Override
-    public String retrieveData(EmailCredentials creds, boolean deleteSpam, ICryptor cryptor) throws IOException {
-        return retrieveDataPop3(new ServerParameters("pop.mail.yahoo.com", 995, creds.getUserPart(), creds.getPassword(), true), deleteSpam);
+    public String retrieveData(EmailCredentials creds, boolean deleteSpam, ICryptor cryptor) throws Exception {
+        return retrieveDataIMAP(new ServerParameters("imap.mail.yahoo.com", 993, creds.getUserPart(), creds.getPassword(), true), cryptor);
     }
 
     @Override
