@@ -20,7 +20,7 @@ import de.burlov.ultracipher.core.ICryptor;
  */
 public class EmailStore {
     private List<IMailHandler> handlers = Arrays.asList((IMailHandler) new GoogleMailHandler(),
-            new GmxHandler()
+            new GmxHandler(), new EinsUndEinsHandler()
             //new YahooMailHandler()//Yahoo auskommentiert, weil IMAP Suche nicht funktioniert
     );
     private PrintWriter log;

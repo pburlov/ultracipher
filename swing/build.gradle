@@ -11,14 +11,4 @@ dependencies {
     compile group: 'org.swinglabs', name: 'swingx', version: '1.6.1'
 }
 
-sourceSets {
-    main {
-        java {
-            srcDir 'src/main/java'
-        }
-        resources {
-            srcDir 'src/main/resources'
-        }
-    }
-}
 
