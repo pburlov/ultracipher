@@ -24,6 +24,6 @@ public class EinsUndEinsHandler extends MailHandler implements IMailHandler {
 
     @Override
     public List<SupportedDomain> getSupportedDomains() {
-        return Arrays.asList(new SupportedDomain("burlov.de", "ultracipher.de"));
+        return Arrays.asList(new SupportedDomain("burlov.de", ""),new SupportedDomain("ultracipher.de", ""));
     }
 }
