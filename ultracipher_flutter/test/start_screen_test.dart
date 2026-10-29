@@ -276,8 +276,11 @@ void main() {
               .controller!
               .text,
           'ultracipher-data');
-      expect(tester.widget<TextField>(_field('Branch')).controller!.text,
-          'main');
+      // New configuration: the branch stays empty (= default branch of the
+      // repository), with a hint saying so.
+      expect(tester.widget<TextField>(_field('Branch')).controller!.text, '');
+      expect(find.text("Empty: the repository's default branch"),
+          findsOneWidget);
 
       await tester.tap(find.widgetWithText(TextButton, 'Skip'));
       await tester.pumpAndSettle();
@@ -509,6 +512,38 @@ void main() {
   group('GitHub settings', () {
     final github = GithubSettings(
         token: 'old-token', owner: 'me', repo: 'ultracipher-data', branch: 'main');
+
+    for (var stored in ['dev', '']) {
+      testWidgets(
+          'an existing configuration shows its stored branch '
+          '(${stored.isEmpty ? 'empty' : stored})', (tester) async {
+        _app.backendForSettings =
+            (settings, key) => settings == null ? null : FakeRemoteBackend();
+        await _seedLocal(tester, _pass,
+            github: GithubSettings(
+                token: 'old-token',
+                owner: 'me',
+                repo: 'ultracipher-data',
+                branch: stored));
+        await _pumpApp(tester);
+        await tester.enterText(find.byType(TextField), _pass);
+        await tester.pump();
+        await tester.tap(find.widgetWithText(ElevatedButton, 'Open'));
+        await tester.pump();
+        await _pumpUntil(tester, () => _app.loadedDatabase.value != null);
+        await tester.pump(const Duration(milliseconds: 300));
+
+        Navigator.of(tester.element(find.byType(DatabaseLoadedScreen))).push(
+            MaterialPageRoute<bool>(
+                builder: (_) => const GithubSettingsScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Remove GitHub'), findsOneWidget);
+        expect(
+            tester.widget<TextField>(_field('Branch')).controller!.text,
+            stored);
+      });
+    }
 
     testWidgets('a missing file asks first (E3); Create on GitHub writes it',
         (tester) async {

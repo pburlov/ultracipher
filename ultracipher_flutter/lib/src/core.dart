@@ -488,8 +488,8 @@ class UltracipherApp {
       if (github != _backendGithub) {
         var rebuilt = _buildBackendFromSettings(github, key);
         if (_sameTarget(backend, rebuilt)) {
-          // Gleiches Ziel (z. B. Standard-Branch gegen ausdruecklichen):
-          // kein Wechsel, das ueberzaehlige neue wird freigegeben.
+          // Gleiches Ziel: kein Wechsel, das ueberzaehlige neue wird
+          // freigegeben.
           if (!identical(rebuilt, backend)) {
             rebuilt?.close();
           }
@@ -910,7 +910,8 @@ class UltracipherApp {
 
   /// Richtet GitHub für die offene Datenbank (neues Modell) ein oder ändert
   /// es: [token] (Pflicht), [repo] (Standard `ultracipher-data`), [branch]
-  /// (Standard `main`).
+  /// (leer oder nur Leerraum: `''`, gemeint ist der Standard-Branch des
+  /// Repositorys, egal ob `main` oder `master`).
   ///
   /// Ablauf: Konto per [GithubBackend.resolveOwner] ermitteln, `<name>.txt`
   /// am Ziel lesen.
@@ -954,7 +955,7 @@ class UltracipherApp {
     String orDefault(String? value, String fallback) =>
         value == null || value.trim().isEmpty ? fallback : value.trim();
     var newRepo = orDefault(repo, GithubBackend.defaultRepo);
-    var newBranch = orDefault(branch, GithubBackend.defaultBranch);
+    var newBranch = orDefault(branch, '');
 
     var session = _session;
     bool alive() =>
@@ -983,13 +984,24 @@ class UltracipherApp {
         (previous.owner != owner ||
             previous.repo != newRepo ||
             previous.branch != newBranch);
+    // Aendert sich nur der Branch und ist eine Seite leer (Standard-Branch),
+    // kann es dieselbe Datei sein (Standard-Branch = der benannte): dann ist
+    // ein Wechsel keine Erlaubnis zum stillen Neuanlegen (E3). Die
+    // Weiterleitung bleibt, der Merge dort ist verlustfrei.
+    var maybeSameFile = previous != null &&
+        moved &&
+        previous.owner == owner &&
+        previous.repo == newRepo &&
+        (previous.branch.isEmpty || newBranch.isEmpty);
     var created = false;
     try {
       var remote = await newBackend.read(name);
       requireAlive();
       UltracipherDatabase? remoteDatabase;
       if (remote.isEmpty) {
-        if (!(confirmCreate || previous == null || moved)) {
+        if (!(confirmCreate ||
+            previous == null ||
+            (moved && !maybeSameFile))) {
           throw GithubFileMissingException();
         }
         created = true;

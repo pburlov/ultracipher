@@ -97,7 +97,7 @@ class _GithubFake extends GithubBackend {
             owner: s.owner,
             repo: s.repo,
             token: s.token,
-            branch: s.branch.isEmpty ? GithubBackend.defaultBranch : s.branch);
+            branch: s.branch);
 
   @override
   Future<RemoteData> read(String name) => inner.read(name);
@@ -247,8 +247,7 @@ void main() {
       expect(_prefs(app).keys.toSet(), equals(prefsKeysBefore));
     });
 
-    test('defaults: empty repo and branch fall back to ultracipher-data/main',
-        () async {
+    test('defaults: an empty repo falls back to ultracipher-data', () async {
       var app = await _freshApp();
       var world = _World()..install(app);
       await app.createDatabase(_pass);
@@ -257,7 +256,37 @@ void main() {
           token: 't', repo: '  ', branch: null, httpClient: _okClient());
 
       expect(world.built.single.repo, GithubBackend.defaultRepo);
-      expect(world.built.single.branch, GithubBackend.defaultBranch);
+    });
+
+    test('an empty or blank branch is stored as empty (default branch), '
+        'never as main', () async {
+      for (var input in <String?>[null, '', '   ', '\t']) {
+        var app = await _freshApp();
+        var world = _World()..install(app);
+        await app.createDatabase(_pass);
+
+        await app.configureGithub(
+            token: 't', repo: 'r', branch: input, httpClient: _okClient());
+
+        expect(world.built.single.branch, '', reason: 'input: $input');
+        expect(app.loadedDatabase.value!.settings!.github!.branch, '',
+            reason: 'input: $input');
+        var kn = await _keyAndName(app, _pass);
+        expect(_storedDb(app, kn).settings!.github!.branch, '',
+            reason: 'input: $input');
+      }
+    });
+
+    test('a branch is trimmed and kept', () async {
+      var app = await _freshApp();
+      var world = _World()..install(app);
+      await app.createDatabase(_pass);
+
+      await app.configureGithub(
+          token: 't', repo: 'r', branch: ' dev ', httpClient: _okClient());
+
+      expect(world.built.single.branch, 'dev');
+      expect(app.loadedDatabase.value!.settings!.github!.branch, 'dev');
     });
 
     test('an existing file is merged (new device) and the settings win by '
@@ -363,7 +392,8 @@ void main() {
       world.at('r').readFailure = RemoteAuthException('rejected');
 
       var error = await _error(
-          app.configureGithub(token: 'bad', repo: 'r', httpClient: _okClient()));
+          app.configureGithub(
+              token: 'bad', repo: 'r', branch: 'main', httpClient: _okClient()));
 
       expect(error, isA<RemoteAuthException>());
       await expectUntouched(app, kn, prefs, app.loadedDatabase.value!);
@@ -381,13 +411,15 @@ void main() {
       remote.readFailure = RemoteBackendException('down');
       expect(
           await _error(
-              app.configureGithub(token: 't', repo: 'r', httpClient: _okClient())),
+              app.configureGithub(
+                  token: 't', repo: 'r', branch: 'main', httpClient: _okClient())),
           isA<RemoteBackendException>());
       remote.readFailure = null;
       remote.writeFailure = RemoteBackendException('down');
       expect(
           await _error(
-              app.configureGithub(token: 't', repo: 'r', httpClient: _okClient())),
+              app.configureGithub(
+                  token: 't', repo: 'r', branch: 'main', httpClient: _okClient())),
           isA<RemoteBackendException>());
       await expectUntouched(app, kn, prefs, app.loadedDatabase.value!);
       expect(remote.storedBytes, isNull);
@@ -395,7 +427,7 @@ void main() {
       // Retry: still a first configuration, so it creates.
       remote.writeFailure = null;
       var result = await app.configureGithub(
-          token: 't', repo: 'r', httpClient: _okClient());
+          token: 't', repo: 'r', branch: 'main', httpClient: _okClient());
       expect(result.created, isTrue);
       expect(remote.storedBytes, isNotNull);
     });
@@ -411,8 +443,8 @@ void main() {
       remote.seed(Uint8List.fromList(List.generate(64, (i) => i)));
       var garbage = remote.storedBytes;
 
-      var error = await _error(
-          app.configureGithub(token: 't', repo: 'r', httpClient: _okClient()));
+      var error = await _error(app.configureGithub(
+          token: 't', repo: 'r', branch: 'main', httpClient: _okClient()));
 
       expect(error, isA<RemoteBackendException>());
       expect(error.toString(), isNot(contains('tok')));
@@ -476,6 +508,66 @@ void main() {
       expect(_remoteDb(remote, kn).settings!.github!.token, 'fresh');
       expect(_labels(_remoteDb(remote, kn)), equals(['x']));
       expect(app.syncStatus.value.state, SyncState.synced);
+    });
+
+    for (var pair in [
+      ['main', ''],
+      ['', 'main'],
+    ]) {
+      var from = pair[0];
+      var to = pair[1];
+      test('branch ${from.isEmpty ? 'empty' : from} -> '
+          '${to.isEmpty ? 'empty' : to}: both may be the same file, '
+          'so a missing file is NOT created silently (E3)', () async {
+        var app = await _freshApp();
+        var world = _World();
+        var remote = world.at('r', branch: from);
+        var kn = await _openWithGithub(
+            app, world, _dbWith(['x'], github: _gh(branch: from)),
+            waitFor: SyncState.remoteMissing);
+        // Alias: the empty branch and `main` point at the same file.
+        app.backendForSettings = (s, key) => s == null ? null : remote;
+        var prefs = _prefs(app);
+        var writesBefore = remote.writeCount;
+
+        var error = await _error(app.configureGithub(
+            token: 'fresh',
+            repo: 'r',
+            branch: to,
+            httpClient: _okClient()));
+
+        expect(error, isA<GithubFileMissingException>());
+        expect(remote.writeCount, writesBefore);
+        expect(remote.storedBytes, isNull);
+        expect(_prefs(app), equals(prefs));
+        expect(app.loadedDatabase.value!.settings!.github!.token, 'tok');
+        expect(app.syncStatus.value.state, SyncState.remoteMissing);
+
+        var result = await app.configureGithub(
+            token: 'fresh',
+            repo: 'r',
+            branch: to,
+            confirmCreate: true,
+            httpClient: _okClient());
+
+        expect(result.created, isTrue);
+        expect(_remoteDb(remote, kn).settings!.github!.branch, to);
+        expect(_labels(_remoteDb(remote, kn)), equals(['x']));
+      });
+    }
+
+    test('a real branch change (both named) still creates without asking',
+        () async {
+      var app = await _freshApp();
+      var world = _World();
+      await _openWithGithub(app, world, _dbWith(['x'], github: _gh()),
+          waitFor: SyncState.remoteMissing);
+
+      var result = await app.configureGithub(
+          token: 'tok', repo: 'r', branch: 'dev', httpClient: _okClient());
+
+      expect(result.created, isTrue);
+      expect(world.at('r', branch: 'dev').storedBytes, isNotNull);
     });
 
     test('a normal sync never creates (remoteMissing stays)', () async {
@@ -955,12 +1047,13 @@ void main() {
       expect(backends.single.closed, isFalse);
     });
 
-    test('an explicit branch equal to the default is no fake switch', () async {
+    test('an empty branch and an explicit main are different targets '
+        '(the default branch is not assumed to be main)', () async {
       var app = await _freshApp();
       var world = _World();
       var kn = await _keyAndName(app, _pass);
-      // Local settings carry no branch (backend falls back to the default);
-      // the other device wrote the explicit default.
+      // Local settings carry the default branch (empty); the other device
+      // wrote an explicit `main`: that may be a different branch.
       _seedRemote(world.at('r'), kn,
           _dbWith(['x'], github: _gh(branch: 'main'), time: _later()));
       var backends = _installGithubFakes(app, world);
@@ -969,13 +1062,10 @@ void main() {
       await app.openLocalDatabase(_pass);
       await _until(() => app.syncStatus.value.state == SyncState.synced);
 
-      var first = backends.first;
-      expect(app.remoteBackend, same(first));
-      expect(first.closed, isFalse);
-      // The rebuilt one was released, nothing else switched.
-      expect(backends.length, 2);
-      expect(backends[1].closed, isTrue);
       expect(app.loadedDatabase.value!.settings!.github!.branch, 'main');
+      expect(app.remoteBackend, same(backends.last));
+      expect((app.remoteBackend as GithubBackend).branch, 'main');
+      expect(backends.first.closed, isTrue);
     });
 
     test('a failed write after the merge still switches on the next '

@@ -6,6 +6,13 @@ repository has no tags.
 
 ## [Unreleased]
 
+### Changed
+
+- GitHub settings: the branch field starts empty for a new configuration, and
+  empty now means the repository's default branch (`main`, `master`, ...)
+  instead of `main`. The app then sends no branch to the GitHub API. Settings
+  saved earlier keep their branch (usually `main`); there is no migration.
+
 ### Open source
 
 - Released under the GPL-3.0 (`LICENSE`), with a root `README.md`.

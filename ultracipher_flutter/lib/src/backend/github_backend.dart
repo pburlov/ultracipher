@@ -62,9 +62,6 @@ class GithubBackend implements RemoteBackend {
   /// Default for [requestTimeout].
   static const Duration defaultRequestTimeout = Duration(seconds: 30);
 
-  /// Branch used when the caller passes no explicit `branch`.
-  static const String defaultBranch = 'main';
-
   /// Schreib- und Löschaufrufe (PUT/DELETE), die noch unterwegs sind.
   /// Prozessweit, nicht je Instanz: ein abgebrochener Sync einer früheren
   /// Sitzung schreibt über ein anderes Objekt an dieselbe Datei.
@@ -142,6 +139,8 @@ class GithubBackend implements RemoteBackend {
   final String owner;
   final String repo;
   final String token;
+  /// Branch der Datei. Leer = Standard-Branch des Repositorys (egal ob
+  /// `main` oder `master`): dann gehen weder `ref` noch `branch` an die API.
   final String branch;
   final http.Client _client;
 
@@ -153,7 +152,7 @@ class GithubBackend implements RemoteBackend {
     required this.owner,
     required this.repo,
     required this.token,
-    this.branch = defaultBranch,
+    this.branch = '',
     String Function(String name)? pathMapper,
     http.Client? client,
     this.requestTimeout = defaultRequestTimeout,
@@ -179,7 +178,8 @@ class GithubBackend implements RemoteBackend {
   String pathFor(String name) => _pathMapper(name);
 
   Uri _contentUri(String name) => Uri.parse(
-      '$apiBase/repos/$owner/$repo/contents/${pathFor(name)}?ref=${Uri.encodeComponent(branch)}');
+      '$apiBase/repos/$owner/$repo/contents/${pathFor(name)}'
+      '${branch.isEmpty ? '' : '?ref=${Uri.encodeComponent(branch)}'}');
 
   Uri _writeUri(String name) => Uri.parse(
       '$apiBase/repos/$owner/$repo/contents/${pathFor(name)}');
@@ -348,7 +348,7 @@ class GithubBackend implements RemoteBackend {
       // The file content is the base64 text; the API then wants that
       // content base64-encoded itself.
       'content': base64.encode(utf8.encode(base64.encode(bytes))),
-      'branch': branch,
+      if (branch.isNotEmpty) 'branch': branch,
       if (version != null) 'sha': version,
     };
     http.Response response;
@@ -410,7 +410,7 @@ class GithubBackend implements RemoteBackend {
     var body = jsonEncode({
       'message': 'Delete database',
       'sha': version,
-      'branch': branch,
+      if (branch.isNotEmpty) 'branch': branch,
     });
     http.Response response;
     try {

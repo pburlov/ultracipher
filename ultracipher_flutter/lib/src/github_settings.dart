@@ -48,7 +48,7 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
     super.initState();
     var github = UltracipherApp.instance.loadedDatabase.value?.settings?.github;
     _repo.text = github?.repo ?? GithubBackend.defaultRepo;
-    _branch.text = github?.branch ?? GithubBackend.defaultBranch;
+    _branch.text = github?.branch ?? '';
     _token.addListener(() => setState(() => _error = null));
   }
 
@@ -115,6 +115,7 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
                       onSubmitted: (_) => _canSave ? _save() : null,
                       decoration: InputDecoration(
                         labelText: 'Branch',
+                        helperText: "Empty: the repository's default branch",
                         border: OutlineInputBorder(),
                         filled: true,
                       ),

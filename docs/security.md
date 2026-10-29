@@ -233,7 +233,7 @@ flowchart LR
 
 - **Local first.** Every change is encrypted and saved on the device immediately. Sync runs afterwards and never blocks or fails a save. Offline use just works.
 - **One database per passphrase.** The database name is derived from the passphrase (see above). Opening with a wrong passphrase finds no database; the message is deliberately neutral.
-- **GitHub file.** The v1 file is stored in your repository as `<name>.txt`, one line of base64. The app talks to the GitHub Contents API with your token; there is no other server.
+- **GitHub file.** The v1 file is stored in your repository as `<name>.txt`, one line of base64. The app talks to the GitHub Contents API with your token; there is no other server. The branch is optional: left empty, the repository's default branch is used (whether it is called `main` or `master`).
 - **Merging.** Sync reads the remote file, merges it with the local data, writes back if anything differs, and retries on conflicts. Divergent edits from several devices are merged rather than overwritten.
 - **Settings live inside the database.** This includes the GitHub token, so it is encrypted together with your data and travels to your other devices through the same file. It is not stored in plaintext in the repository. CSV export never contains the settings; the encrypted export does (token included).
 - **History.** Git keeps every earlier version of `<name>.txt`. This is accepted, with an important consequence: **changing your passphrase does not protect versions already pushed.** Old commits stay encrypted under the old passphrase and algorithms. If that passphrase was weak or later leaked, those versions are exposed. Treat a compromised passphrase as a compromise of everything that was ever pushed under it.

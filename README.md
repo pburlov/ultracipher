@@ -9,7 +9,8 @@ notes.
 - **Local first.** The database lives encrypted on your device. Every change is
   saved locally first; sync runs in the background and never blocks a save.
 - **Optional sync through your own GitHub repository.** The encrypted file is
-  stored as `<name>.txt` in a repository you choose and merged across devices.
+  stored as `<name>.txt` in a repository you choose (its default branch unless
+  you name one) and merged across devices.
   GitHub only ever sees ciphertext. The app has no server of its own.
 - **Layered encryption.** Argon2id and scrypt for key derivation, then a
   cascade of AES-256, Twofish-256 and ChaCha20 with two independent MACs. The

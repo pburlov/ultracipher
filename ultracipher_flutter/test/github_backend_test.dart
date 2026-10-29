@@ -137,8 +137,8 @@ http.Response _json(Object json, int status) => http.Response(
 String _apiContent(List<int> bytes) =>
     base64.encode(utf8.encode(base64.encode(bytes)));
 
-GithubBackend _backend(_StubClient stub) => GithubBackend(
-    owner: _owner, repo: _repo, token: _token, client: stub);
+GithubBackend _backend(_StubClient stub, {String branch = ''}) => GithubBackend(
+    owner: _owner, repo: _repo, token: _token, branch: branch, client: stub);
 
 /// The three requests that go through the status mapping, by name, with
 /// the HTTP method each one sends.
@@ -197,6 +197,55 @@ void main() {
         isNot(contains(_token)));
   });
 
+  group('branch', () {
+    const path = '/repos/$_owner/$_repo/contents/test.txt';
+
+    _StubClient okStub() => _StubClient({
+          'GET $path': (_) => _json({
+                'sha': 'abc',
+                'content': _apiContent([1]),
+                'encoding': 'base64',
+              }, 200),
+          'PUT $path': (_) => _json({
+                'content': {'sha': 'new'}
+              }, 200),
+          'DELETE $path': (_) => _json({}, 200),
+        });
+
+    Future<_StubClient> useAll(String branch) async {
+      var stub = okStub();
+      var backend = _backend(stub, branch: branch);
+      await backend.read('test');
+      await backend.write('test', Uint8List.fromList([1]), version: 'abc');
+      await backend.delete('test', 'abc');
+      return stub;
+    }
+
+    test('empty branch means the default branch: no ref, no branch field',
+        () async {
+      var stub = await useAll('');
+
+      expect(stub.requests, hasLength(3));
+      expect(stub.requests[0].url.queryParameters.containsKey('ref'), isFalse);
+      expect(stub.requests[0].url.hasQuery, isFalse);
+      var put = jsonDecode(stub.bodies[1]!) as Map;
+      var del = jsonDecode(stub.bodies[2]!) as Map;
+      expect(put.containsKey('branch'), isFalse);
+      expect(del.containsKey('branch'), isFalse);
+      // The rest of the bodies is untouched.
+      expect(put['sha'], 'abc');
+      expect(del['sha'], 'abc');
+    });
+
+    test('a named branch is sent as ref and as branch field', () async {
+      var stub = await useAll('dev');
+
+      expect(stub.requests[0].url.queryParameters['ref'], 'dev');
+      expect((jsonDecode(stub.bodies[1]!) as Map)['branch'], 'dev');
+      expect((jsonDecode(stub.bodies[2]!) as Map)['branch'], 'dev');
+    });
+  });
+
   test('read of a missing file yields empty bytes and null version', () async {
     var stub = _StubClient({});
     var backend = _backend(stub);
@@ -250,7 +299,7 @@ void main() {
       },
     });
 
-    var newVersion = await _backend(stub)
+    var newVersion = await _backend(stub, branch: 'main')
         .write('test', Uint8List.fromList([9, 8, 7]));
 
     expect(newVersion, equals('newsha1'));
