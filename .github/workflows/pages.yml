@@ -1,12 +1,12 @@
-# CI (analyze, tests) laeuft immer; die Web-Version (WASM) wird nur bei einem
-# Push auf den Branch "pages" veroeffentlicht, und nur wenn im Repo die Variable
-# DEPLOY_PAGES = true gesetzt ist (Settings -> Secrets and variables -> Actions -> Variables).
+# CI (analyze, tests) laeuft immer; die Web-Version (WASM) wird nur dann auf
+# GitHub Pages veroeffentlicht, wenn im Repo die Variable DEPLOY_PAGES = true
+# gesetzt ist (Settings -> Secrets and variables -> Actions -> Variables).
 # Gedacht fuer den eigenen Fork, siehe README.
 name: CI and GitHub Pages
 
 on:
   push:
-    branches: [master, pages]
+    branches: [master]
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -43,8 +43,8 @@ jobs:
 
   build:
     needs: ci
-    # Nie fuer Pull Requests (Forks); nur Branch "pages" und gesetzte Repo-Variable.
-    if: vars.DEPLOY_PAGES == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/pages'
+    # Nie fuer Pull Requests (Forks); nur mit gesetzter Repo-Variable.
+    if: vars.DEPLOY_PAGES == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -81,7 +81,7 @@ jobs:
 
   deploy:
     needs: build
-    if: vars.DEPLOY_PAGES == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/pages'
+    if: vars.DEPLOY_PAGES == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pages: write
