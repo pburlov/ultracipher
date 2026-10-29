@@ -1,0 +1,88 @@
+#!/bin/sh
+# Pre-commit hook: increments the patch segment (2.0.X) of the Flutter app
+# version on every commit, so the title shown by the login screen (which
+# reads the version from the package metadata) always matches the commit
+# that was built. The bumped pubspec is staged into the same commit.
+#
+# Operates on the INDEX version of the file, not the working-tree file: a
+# plain `git add "$PUBSPEC"` would stage the whole working-tree file,
+# silently committing any unstaged edits sitting in it (e.g. a half-done
+# dependency change) alongside the version bump. Instead the version line
+# is bumped in the blob that's already staged (or HEAD's, if nothing is
+# staged) and written back with plain index plumbing, which respects
+# GIT_INDEX_FILE and therefore also works for a partial commit
+# (`git commit <path>`) that runs against a temporary index.
+#
+# Installed via: git config core.hooksPath .githooks
+# Bypass for a single commit with: git commit --no-verify
+
+PUBSPEC="ultracipher_flutter/pubspec.yaml"
+
+# Hook runs from the repo root (core.hooksPath is relative to it).
+# Look up the index entry rather than testing the working-tree file: if the
+# file isn't staged (e.g. it doesn't exist yet, or this is a partial commit
+# that doesn't touch it), there is nothing for this hook to bump.
+ENTRY=$(git ls-files -s -- "$PUBSPEC")
+if [ -z "$ENTRY" ]; then
+  exit 0
+fi
+MODE=$(echo "$ENTRY" | cut -d' ' -f1)
+
+CURRENT=$(git cat-file blob ":$PUBSPEC" | sed -n 's/^version: \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*.*\)$/\1/p' | head -n 1)
+if [ -z "$CURRENT" ]; then
+  echo "pre-commit: no X.Y.Z version found in staged $PUBSPEC, skipping bump" >&2
+  exit 0
+fi
+INDEX_CURRENT="$CURRENT"
+
+# A `git commit <path>` that doesn't include $PUBSPEC leaves the real index
+# entry for it untouched (stale) once the commit is done - the temporary
+# index git builds for that commit is based on HEAD, not on the real index.
+# If a later commit (partial or not) then reads that stale, older index
+# entry as the base, the version would stall or even go backwards relative
+# to HEAD. Guard against that: when the index and HEAD agree on major.minor
+# but the index patch is behind HEAD's, bump from HEAD's version instead.
+HEAD_CURRENT=$(git cat-file blob "HEAD:$PUBSPEC" 2>/dev/null | sed -n 's/^version: \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*.*\)$/\1/p' | head -n 1)
+if [ -n "$HEAD_CURRENT" ]; then
+  INDEX_MM=$(echo "$CURRENT" | cut -d. -f1-2)
+  HEAD_MM=$(echo "$HEAD_CURRENT" | cut -d. -f1-2)
+  INDEX_PATCH=$(echo "$CURRENT" | cut -d. -f3 | sed 's/[^0-9].*//')
+  HEAD_PATCH=$(echo "$HEAD_CURRENT" | cut -d. -f3 | sed 's/[^0-9].*//')
+  if [ "$INDEX_MM" = "$HEAD_MM" ] && [ "$INDEX_PATCH" -lt "$HEAD_PATCH" ]; then
+    CURRENT="$HEAD_CURRENT"
+  fi
+fi
+
+MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+MINOR=$(echo "$CURRENT" | cut -d. -f2)
+PATCH_REST=$(echo "$CURRENT" | cut -d. -f3)
+PATCH=$(echo "$PATCH_REST" | sed 's/[^0-9].*//')
+SUFFIX=$(echo "$PATCH_REST" | sed 's/^[0-9]*//')
+NEXT="$MAJOR.$MINOR.$((PATCH + 1))$SUFFIX"
+
+# Rewrite the version line in the staged blob and write the result back as a
+# new blob, without ever materializing it in the working tree. Pipe straight
+# through, don't capture in $(...), which would strip trailing newlines.
+NEW_SHA=$(git cat-file blob ":$PUBSPEC" | sed "s/^version: .*/version: $NEXT/" | git hash-object -w --stdin) || exit 1
+git update-index --cacheinfo "$MODE,$NEW_SHA,$PUBSPEC" || exit 1
+
+# Mirror the same one-line bump into the working-tree file, so it doesn't
+# show up as a reverted change after the commit - but only if the
+# working-tree copy still has the version line this bump was based on.
+# If it differs, the user has an unstaged edit to the version line itself;
+# leave it alone rather than clobbering it.
+if [ -f "$PUBSPEC" ]; then
+  WT_CURRENT=$(sed -n 's/^version: \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*.*\)$/\1/p' "$PUBSPEC" | head -n 1)
+  # Accept either the version this bump was based on (the plain case) or
+  # the originally-read index version (the stale-index case above, where
+  # the working tree already carries HEAD_CURRENT and CURRENT was bumped
+  # from that instead of from the stale INDEX_CURRENT).
+  if [ "$WT_CURRENT" = "$CURRENT" ] || [ "$WT_CURRENT" = "$INDEX_CURRENT" ]; then
+    sed -i.bak "s/^version: .*/version: $NEXT/" "$PUBSPEC"
+    rm -f "$PUBSPEC.bak"
+  else
+    echo "pre-commit: working-tree $PUBSPEC has an unstaged version edit, leaving it as-is" >&2
+  fi
+fi
+
+echo "pre-commit: bumped app version $CURRENT -> $NEXT"

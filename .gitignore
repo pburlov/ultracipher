@@ -1,8 +1,17 @@
-.gradle
-/local.properties
-/.idea
-.DS_Store
-/build
+# Lokale SDK-Pfade, geraetespezifisch
+local.properties
 
-ultracipher.iml
-gradle
+# IDE-Metadaten (IntelliJ/Android Studio)
+.idea/
+*.iml
+
+# Generierte Flutter-Plugin-Liste
+.flutter-plugins-dependencies
+
+# macOS-Finder-Metadaten
+.DS_Store
+.flutter-plugins
+
+# Build-Ausgaben und Dart-Cache
+build/
+.dart_tool/

@@ -1,0 +1,98 @@
+# CI (analyze, tests) laeuft immer; die Web-Version (WASM) wird nur dann auf
+# GitHub Pages veroeffentlicht, wenn im Repo die Variable DEPLOY_PAGES = true
+# gesetzt ist (Settings -> Secrets and variables -> Actions -> Variables).
+# Gedacht fuer den eigenen Fork, siehe README.
+name: CI and GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ultracipher_flutter
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Flutter-Version fest (reproduzierbarer Web-Build).
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.47.8
+          cache: true
+
+      - run: flutter pub get
+
+      # Die zwei bekannten Infos duerfen CI nicht rot machen.
+      - run: flutter analyze --no-fatal-infos
+
+      - run: flutter test --concurrency=4
+
+  build:
+    needs: ci
+    # Nie fuer Pull Requests (Forks); nur mit gesetzter Repo-Variable.
+    if: vars.DEPLOY_PAGES == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    defaults:
+      run:
+        working-directory: ultracipher_flutter
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.47.8
+          cache: true
+
+      - run: flutter pub get
+
+      # base_path: "/<repo>" bei Projektseiten, leer bei <user>.github.io
+      # oder eigener Domain; der Base-Href braucht das abschliessende "/".
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - run: flutter build web --wasm --no-web-resources-cdn --base-href "${BASE_PATH}/"
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+
+      # path ist relativ zum Repo-Root (working-directory gilt hier nicht).
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ultracipher_flutter/build/web
+
+  deploy:
+    needs: build
+    if: vars.DEPLOY_PAGES == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    # Ein Deploy gleichzeitig; ein laufender wird nicht abgebrochen.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
