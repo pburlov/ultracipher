@@ -17,6 +17,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ultracipher_flutter/src/backend/github_backend.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
+import 'package:ultracipher_flutter/src/commons.dart' show describeError;
 import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
@@ -24,6 +25,7 @@ import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
+import 'write_limit.dart';
 
 const _pass = 'passphrase A';
 
@@ -633,6 +635,77 @@ void main() {
       expect(_remoteDb(newRemote, kn).settings!.github!.repo, 'r2');
       expect(_remoteDb(oldRemote, kn).settings!.github!.repo, 'r');
       expect(app.loadedDatabase.value!.settings!.github!.repo, 'r2');
+    });
+
+    test('forwarding to an old file whose merge would exceed the limit is '
+        'reported, writes nothing there and does not touch the session',
+        () async {
+      var app = await _freshApp();
+      var world = _World();
+      var oldRemote = world.at('r');
+      var kn = await _keyAndName(app, _pass);
+      _seedRemote(oldRemote, kn, _dbWith(['x']));
+      await _openWithGithub(app, world, _dbWith(['x'], github: _gh()));
+      var size = UltracipherApp.encryptDatabase(
+              app.loadedDatabase.value!, kn.key)
+          .length;
+      // Another device added a big entry at the old location meanwhile.
+      var big = _dbWith(['x', 'big'], github: _gh());
+      big.allEntries
+          .firstWhere((e) => e.latestEntry!.label == 'big')
+          .latestEntry!
+          .content = noise(20000);
+      _seedRemote(oldRemote, kn, big);
+      limitWritesTo(size + 2000);
+      var oldWrites = oldRemote.committedWrites;
+
+      var result = await app.configureGithub(
+          token: 'tok', repo: 'r2', branch: 'main', httpClient: _okClient());
+
+      expect(result.oldLocationError, isA<DatabaseTooLargeException>());
+      expect(describeError(result.oldLocationError!), tooLargeMessage);
+      expect(oldRemote.committedWrites, oldWrites);
+      expect(_labels(app.loadedDatabase.value!), ['x']);
+      expect(_labels(_storedDb(app, kn)), ['x']);
+      expect(app.loadedDatabase.value!.settings!.github!.repo, 'r2');
+    });
+
+    test('a new location whose file is already as big as the limit forbids is '
+        'refused: session, settings and backend stay as they were', () async {
+      var app = await _freshApp();
+      var world = _World();
+      var oldRemote = world.at('r');
+      var newRemote = world.at('r2');
+      var kn = await _keyAndName(app, _pass);
+      _seedRemote(oldRemote, kn, _dbWith(['x']));
+      await _openWithGithub(app, world, _dbWith(['x'], github: _gh()));
+      var backend = app.remoteBackend;
+      var size = UltracipherApp.encryptDatabase(
+              app.loadedDatabase.value!, kn.key)
+          .length;
+      var stored = _prefs(app);
+      // The file at the new location already carries these very settings
+      // (later time) and a big entry: the configuration has nothing to write,
+      // but taking over its state would break the limit.
+      var big = _dbWith(['x', 'big'],
+          github: _gh(repo: 'r2'), time: _later());
+      big.allEntries
+          .firstWhere((e) => e.latestEntry!.label == 'big')
+          .latestEntry!
+          .content = noise(20000);
+      _seedRemote(newRemote, kn, big);
+      limitWritesTo(size + 2000);
+      var writes = newRemote.committedWrites;
+
+      var error = await _error(app.configureGithub(
+          token: 'tok', repo: 'r2', branch: 'main', httpClient: _okClient()));
+
+      expect(error, isA<DatabaseTooLargeException>());
+      expect(newRemote.committedWrites, writes);
+      expect(_labels(app.loadedDatabase.value!), ['x']);
+      expect(app.loadedDatabase.value!.settings!.github!.repo, 'r');
+      expect(app.remoteBackend, same(backend));
+      expect(_prefs(app), stored);
     });
 
     test('a branch change counts as a switch and creates at the new location',

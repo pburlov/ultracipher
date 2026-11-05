@@ -20,6 +20,7 @@ import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
+import 'write_limit.dart';
 
 const _passA = 'passphrase A';
 const _passB = 'passphrase B';
@@ -553,6 +554,34 @@ void main() {
       expect(_labels(_local(app, _a)!), ['x']);
       expect(_labels(_remote(repo, _b)!), ['x']);
       expect(_labels(_local(app, _b)!), ['x']);
+    });
+
+    test('the old file changed to something whose merge would exceed the '
+        'limit: reported, not merged into the session, old file stays',
+        () async {
+      var repo = _Repo();
+      var app = await _openRemoteA(repo, ['x']);
+      var size = _enc(app.loadedDatabase.value!, _a).length;
+      var old = repo.file(_a.name);
+      var big = _dbWith(['x', 'late'], github: _github);
+      big.allEntries
+          .firstWhere((e) => e.latestEntry!.label == 'late')
+          .latestEntry!
+          .content = noise(20000);
+      var bigBytes = _enc(big, _a);
+      limitWritesTo(size + 2000);
+      repo.file(_b.name).beforeWrite = (n) {
+        if (n == 1) old.seed(bigBytes);
+      };
+
+      var result = await _change(app);
+
+      expect(result.cleanupError, isA<DatabaseTooLargeException>());
+      expect(describeError(result.cleanupError!), tooLargeMessage);
+      expect(old.storedBytes, bigBytes);
+      expect(_labels(app.loadedDatabase.value!), ['x']);
+      expect(_labels(_remote(repo, _b)!), ['x']);
+      expect(_local(app, _a), isNotNull);
     });
 
     test('the old file changed since it was read: the delete conflicts, its '

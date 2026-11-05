@@ -30,6 +30,7 @@ import 'package:ultracipher_flutter/src/view_entry.dart';
 
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
+import 'write_limit.dart';
 
 const _pass = 'correct horse';
 
@@ -391,6 +392,18 @@ void main() {
           findsOneWidget);
       expect(_inDialog(find.textContaining('"Sync now" first')),
           findsOneWidget);
+    });
+
+    testWidgets('the encrypted export over the write limit shows the message',
+        (tester) async {
+      await _seed(tester, labels: ['bank']);
+      await _open(tester);
+      limitWritesTo(1);
+
+      await _menu(tester, 'Export encrypted (base64)');
+      await _pumpUntil(
+          tester, () => find.text(tooLargeMessage).evaluate().isNotEmpty);
+      expect(find.text('Encrypted text'), findsNothing);
     });
 
     testWidgets('the encrypted export warns about the included token',
@@ -980,6 +993,31 @@ void main() {
       await tester.pumpAndSettle();
 
       // Nothing was saved, so the deletion is undone in memory too.
+      expect(database.getEntries(), hasLength(1));
+      expect(database.deletions.containsKey(id), isFalse);
+      expect(find.byType(EntryViewScreen), findsOneWidget);
+    });
+
+    testWidgets('a save over the write limit shows the message and puts the '
+        'entry back', (tester) async {
+      await _seed(tester, labels: ['bank']);
+      await _open(tester);
+      limitWritesTo(1);
+      var database = _app.loadedDatabase.value!;
+      var id = database.getEntries().single.id;
+
+      await tester.tap(find.text('bank'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_forever));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pump();
+      await _pumpUntil(
+          tester, () => find.byIcon(Icons.check_circle).evaluate().isNotEmpty);
+      expect(find.text(tooLargeMessage), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.check_circle));
+      await tester.pumpAndSettle();
+
       expect(database.getEntries(), hasLength(1));
       expect(database.deletions.containsKey(id), isFalse);
       expect(find.byType(EntryViewScreen), findsOneWidget);

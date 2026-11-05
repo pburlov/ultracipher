@@ -145,7 +145,8 @@ String describeError(Object error) {
       error is NoLocalDatabaseException ||
       error is LocalDatabaseExistsException ||
       error is LocalDatabaseUnreadableException ||
-      error is GithubFileMissingException) {
+      error is GithubFileMissingException ||
+      error is DatabaseTooLargeException) {
     return error.toString();
   }
   return 'Something went wrong (${error.runtimeType})';

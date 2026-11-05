@@ -3,7 +3,8 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show compute, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show compute, kIsWeb, visibleForTesting;
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -63,6 +64,17 @@ class GithubFileMissingException implements Exception {
   String toString() => 'No database file found on GitHub at this location. '
       'If the passphrase was changed, use "Change passphrase"; otherwise '
       'create the file on GitHub.';
+}
+
+/// Die verschlüsselte Datenbank wäre größer als das Schreiblimit
+/// ([UltracipherApp.maxWritableFileLength]); [UltracipherApp.encryptDatabase]
+/// wirft das vor jedem lokalen oder entfernten Schreiben, es wurde nichts
+/// gespeichert. Die Meldung nennt keinen Inhalt.
+class DatabaseTooLargeException implements Exception {
+  @override
+  String toString() => 'The database is too large to save (limit 16 MB). '
+      'Delete entries, or export CSV and start a new database; nothing was '
+      'saved.';
 }
 
 /// Ausgang von [UltracipherApp.configureGithub] und
@@ -440,15 +452,20 @@ class UltracipherApp {
           return publish(SyncStatus(SyncState.notSynced, error: e.message));
         }
 
-        // Ab hier bis zum Aufruf von _storeSessionCopy kein await.
-        var before = UltracipherDatabase.fromJson(database.toJson());
-        database.merge(remoteDatabase);
-        var localChanged = !database.hasSameContentAs(before);
-        var needsPush = !database.hasSameContentAs(remoteDatabase);
+        // Ab hier bis zum Aufruf von _storeSessionCopy kein await. Erst auf
+        // einer Kopie mergen und verschluesseln (Limitpruefung), dann die
+        // Sitzung: ein Stand ueber dem Limit kommt nie in die Sitzung, sonst
+        // scheiterte jedes weitere Speichern und die DB liesse sich nicht mehr
+        // verkleinern.
+        var merged = UltracipherDatabase.fromJson(database.toJson());
+        merged.merge(remoteDatabase);
+        var localChanged = !merged.hasSameContentAs(database);
+        var needsPush = !merged.hasSameContentAs(remoteDatabase);
         Uint8List? data;
         if (localChanged || needsPush) {
-          data = encryptDatabase(database, key);
+          data = encryptDatabase(merged, key);
         }
+        database.merge(merged);
         if (data != null) {
           // Der gemergte Stand ersetzt die lokale Kopie; dieselben Bytes gehen
           // gleich ans Remote (auch ohne Merge-Aenderung: so haelt die Kopie
@@ -525,6 +542,11 @@ class UltracipherApp {
           retryAfter: wait,
           retryAt: wait == null ? null : DateTime.now().add(wait),
           cause: e));
+    } on DatabaseTooLargeException catch (e) {
+      // Der gemergte Stand passt nicht ins Schreiblimit: nichts gespeichert,
+      // nichts gesendet, die Sitzung blieb ungemergt.
+      return publish(
+          SyncStatus(SyncState.notSynced, error: e.toString(), cause: e));
     } on RemoteBackendException catch (e) {
       // Die Meldungen der Backends enthalten nie Token oder URL.
       print('Sync failed (${e.runtimeType})');
@@ -1023,11 +1045,16 @@ class UltracipherApp {
       }
 
       // Uebernehmen, ohne await bis zum Wechsel der Sitzung. Der Merge ist ein
-      // Halbverband: Aenderungen der Zwischenzeit gehen nicht verloren.
+      // Halbverband: Aenderungen der Zwischenzeit gehen nicht verloren. Erst
+      // auf einer Kopie verschluesseln (Limitpruefung, auch wenn das Ziel schon
+      // gleich war und nichts geschrieben wurde), dann die Sitzung (siehe
+      // _syncOnce).
       var oldBackend = remoteBackend;
-      database.merge(candidate);
-      var stored =
-          _storeSessionCopy(name, encryptDatabase(database, key), key);
+      var merged = UltracipherDatabase.fromJson(database.toJson());
+      merged.merge(candidate);
+      var data = encryptDatabase(merged, key);
+      database.merge(merged);
+      var stored = _storeSessionCopy(name, data, key);
       _replaceBackend(
           newBackend,
           newGithub,
@@ -1086,8 +1113,12 @@ class UltracipherApp {
       for (var attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
         var remote = await old.read(name);
         if (!alive() || remote.isEmpty) return null;
-        database.merge(decryptDatabase(remote.bytes, key));
-        var data = encryptDatabase(database, key);
+        // Erst eine Kopie mergen und verschluesseln (Limitpruefung), dann die
+        // Sitzung (siehe _syncOnce); kein await dazwischen.
+        var merged = UltracipherDatabase.fromJson(database.toJson());
+        merged.merge(decryptDatabase(remote.bytes, key));
+        var data = encryptDatabase(merged, key);
+        database.merge(merged);
         await _storeSessionCopy(name, data, key);
         if (!alive()) return null;
         try {
@@ -1312,6 +1343,10 @@ class UltracipherApp {
       await storage!.setString(localPrefsKey(newName), base64.encode(data));
       requireAlive();
 
+      // Das Limit greift hier nicht mehr: die Sperre ([_flight.exclusive])
+      // haelt den Sync an und runWithProgress das Speichern, die Sitzung
+      // wuchs seit der Pruefung von `candidate` also nicht; ein Kopie-Muster
+      // wie in _syncOnce braucht es nicht.
       // Wechsel der Sitzung ohne await. Kein _newSession: das gaebe die Sperre
       // frei. Der neue Zaehler laesst ein laufendes Speichern des alten Namens
       // scheitern, statt dessen Kopie neu anzulegen; Aenderungen aus der
@@ -1429,15 +1464,17 @@ class UltracipherApp {
       // Mergen, verschluesseln und den Cache-Aufruf ohne await dazwischen,
       // lokal VOR dem Remote (wie _syncOnce): ein Speichern waehrend des
       // Schreibens landet danach in der Kopie und wird nicht von diesem
-      // aelteren Stand ueberschrieben.
-      database.merge(_decryptRemote(again, oldKey));
-      var snapshot = UltracipherDatabase.fromJson(database.toJson());
-      var data = encryptDatabase(database, newKey);
+      // aelteren Stand ueberschrieben. Erst auf einer Kopie mergen und
+      // verschluesseln (Limitpruefung), dann die Sitzung (siehe _syncOnce).
+      var merged = UltracipherDatabase.fromJson(database.toJson());
+      merged.merge(_decryptRemote(again, oldKey));
+      var data = encryptDatabase(merged, newKey);
+      database.merge(merged);
       await _storeSessionCopy(newName, data, newKey);
       requireAlive();
       newVersion = await backend.write(newName, data, version: newVersion);
       requireAlive();
-      pushed = snapshot;
+      pushed = merged;
       version = again.version!;
     }
     throw RemoteConflictException('The old file kept changing while it was '
@@ -1506,9 +1543,28 @@ class UltracipherApp {
   static UltracipherDatabase decryptDatabase(Uint8List bytes, Uint8List root) =>
       decryptDatabaseV1(bytes, root);
 
+  /// Obergrenze der Ciphertext-Größe, die die App schreibt (lokal und
+  /// remote); Lesen geht weiter bis [maxFileLength]. Kleiner als das
+  /// Leselimit, damit der Upload weit unter GitHubs Grenzen bleibt und das
+  /// Web (WASM, etwa 1,4 s je MiB) erträglich. Nicht final nur für Tests.
+  @visibleForTesting
+  static int maxWritableFileLength = 16 * 1024 * 1024;
+
   /// Verschlüsselt [database] als Datei v1 mit `R` ([root]). [fileSalt] ist
   /// nur für Tests; sonst kommt er bei jedem Aufruf frisch aus `Random.secure()`.
+  ///
+  /// Wirft [DatabaseTooLargeException], wenn das Ergebnis über
+  /// [maxWritableFileLength] liegt; damit vor jedem Schreiben, denn alle
+  /// Schreibpfade gehen hier durch. Die Prüfung steht bewusst nicht in
+  /// `db_codec.dart` (Formatcode, WASM-Gate). Ein Klartext, der so groß ist,
+  /// dass `seal` selbst mit [ArgumentError] ablehnt (über 64 MiB), scheitert
+  /// praktisch vorher am Arbeitsspeicher und wird nicht abgefangen.
   static Uint8List encryptDatabase(UltracipherDatabase database, Uint8List root,
-          {Uint8List? fileSalt}) =>
-      encryptDatabaseV1(database, root, fileSalt: fileSalt);
+      {Uint8List? fileSalt}) {
+    var bytes = encryptDatabaseV1(database, root, fileSalt: fileSalt);
+    if (bytes.length > maxWritableFileLength) {
+      throw DatabaseTooLargeException();
+    }
+    return bytes;
+  }
 }

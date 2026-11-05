@@ -20,6 +20,7 @@ import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
+import 'write_limit.dart';
 
 const _pass = 'sync passphrase';
 
@@ -59,9 +60,9 @@ class _Env {
 
   /// Lands a change by "another device" in the remote: adds [label] to a copy
   /// of the remote state (same entry ids) and stores it with a new version.
-  void otherDeviceAdds(String label) {
+  void otherDeviceAdds(String label, {String content = ''}) {
     var db = remoteDb();
-    db.addEntry().addNewVersion(Entry(label: label));
+    db.addEntry().addNewVersion(Entry(label: label, content: content));
     remote.seed(UltracipherApp.encryptDatabase(db, key));
   }
 
@@ -877,6 +878,57 @@ void main() {
       expect(env.app.syncStatus.value.state, isNot(SyncState.synced));
       gate.complete();
       expect((await env.app.syncNow()).state, SyncState.synced);
+    });
+  });
+
+  group('write limit', () {
+    test('saving over the limit throws, saves nothing and sends nothing',
+        () async {
+      var env = await _open();
+      var cache = env.cacheBytes();
+      var writes = env.remote.writeCount;
+      limitWritesTo(cache.length + 2000);
+
+      env.db.addEntry().addNewVersion(Entry(label: 'big', content: noise(20000)));
+      await expectLater(
+          env.app.saveDatabase(), throwsA(isA<DatabaseTooLargeException>()));
+
+      expect(env.cacheBytes(), cache);
+      expect(env.remote.writeCount, writes);
+    });
+
+    test('exporting over the limit throws', () async {
+      var env = await _open();
+      limitWritesTo(env.cacheBytes().length + 2000);
+      env.db.addEntry().addNewVersion(Entry(label: 'big', content: noise(20000)));
+
+      await expectLater(env.app.exportEncryptedDatabase(),
+          throwsA(isA<DatabaseTooLargeException>()));
+    });
+
+    test('a remote whose merge would exceed the limit gives notSynced with the '
+        'message, pushes nothing and is not merged into the session', () async {
+      var env = await _open();
+      var size = env.cacheBytes().length;
+      env.otherDeviceAdds('big', content: noise(20000));
+      limitWritesTo(size + 2000);
+      var cache = env.cacheBytes();
+      var writes = env.remote.writeCount;
+
+      var status = await env.app.syncNow();
+
+      expect(status.state, SyncState.notSynced);
+      expect(status.error, tooLargeMessage);
+      expect(env.remote.writeCount, writes);
+      expect(env.cacheBytes(), cache);
+      // No trap: the session did not take the remote entries, so it stays
+      // under the limit and the user can still save (and delete).
+      expect(_labels(env.db), ['base']);
+      await env.localAdds('small');
+      expect(_labels(env.cachedDb()), ['base', 'small']);
+      await env.app.syncNow();
+      expect(_labels(env.db), ['base', 'small']);
+      expect(env.remote.writeCount, writes);
     });
   });
 }

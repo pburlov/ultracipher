@@ -83,6 +83,13 @@ Export a CSV with the old app version first.
 
 ### Added
 
+- Write limit: the app never writes an encrypted database larger than 16 MiB
+  (`UltracipherApp.maxWritableFileLength`; reading still accepts up to 64 MiB).
+  A save, export or sync that would exceed it fails with a fixed message and
+  saves and sends nothing; a merge is checked on a copy first, so the open
+  database never grows past the limit. A database already over 16 MiB can only
+  be brought under it by deleting entries or via CSV (export, new database,
+  import).
 - Start screen: with local databases, a passphrase field with "Open" and
   buttons "New" and "Import"; without one, a short explanation. One
   passphrase is one database; a wrong passphrase just finds nothing ("No

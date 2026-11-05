@@ -9,6 +9,7 @@ import 'package:ultracipher_flutter/src/commons.dart';
 import 'package:ultracipher_flutter/src/core.dart';
 
 import 'memoized_key_derivation.dart';
+import 'write_limit.dart';
 
 const _legacy = {
   'user': 'old user',
@@ -98,6 +99,7 @@ void main() {
           LocalDatabaseExistsException().toString());
       expect(describeError(GithubFileMissingException()),
           GithubFileMissingException().toString());
+      expect(describeError(DatabaseTooLargeException()), tooLargeMessage);
     });
 
     test('unknown errors give only the type name', () {

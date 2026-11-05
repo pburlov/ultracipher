@@ -649,9 +649,13 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     Uint8List bytes;
     try {
       bytes = await UltracipherApp.instance.exportEncryptedDatabase();
-    } catch (_) {
-      // Keine Fehlerdetails anzeigen.
-      if (mounted) _showMessage('Export failed');
+    } catch (e) {
+      // Keine Fehlerdetails anzeigen, ausser der festen Meldung zum Limit.
+      if (mounted) {
+        _showMessage(e is DatabaseTooLargeException
+            ? e.toString()
+            : 'Export failed');
+      }
       return;
     }
     if (!mounted) return;
