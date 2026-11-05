@@ -11,7 +11,6 @@
 // copy before encrypting, so a write() that silently did nothing would leave
 // the count unchanged. encryptDatabase uses a fresh IV on every call, so
 // comparing the raw ciphertext closes that gap.
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +21,7 @@ import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 
@@ -69,8 +69,7 @@ void main() {
     expect((await app.syncNow()).state, SyncState.synced);
     expect(remote.committedWrites, equals(writesBefore + 1));
     // The local copy holds exactly the bytes handed to write().
-    Uint8List localCopy() => base64
-        .decode(app.storage!.getString(UltracipherApp.localPrefsKey(name))!);
+    Uint8List localCopy() => localBytes(app, name);
     var writtenCiphertext = localCopy();
     expect(remote.storedBytes, equals(writtenCiphertext));
 

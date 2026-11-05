@@ -27,6 +27,7 @@ import 'package:ultracipher_flutter/src/progess_screen.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/view_entry.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 
@@ -71,6 +72,19 @@ Future<void> _seedLocal(WidgetTester tester, String pass,
     await _app.saveDatabase();
     _app.closeDatabase();
   });
+}
+
+/// Like pumpAndSettle, but every round also lets the real zone run: the local
+/// store finishes its work there (it was set up outside the fake zone), which
+/// a plain pump never reaches. Ends when no frame is scheduled any more, not
+/// after a fixed time.
+Future<void> _settle(WidgetTester tester) async {
+  for (var i = 0; i < 500; i++) {
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump(const Duration(milliseconds: 100));
+    if (!tester.binding.hasScheduledFrame) return;
+  }
+  fail('the screen did not settle');
 }
 
 final Finder _menuButton = find.byWidgetPredicate((w) => w is PopupMenuButton);
@@ -157,9 +171,9 @@ void main() {
     });
 
     testWidgets('a wrong passphrase gives the neutral message and leaves no '
-        'trace in the prefs', (tester) async {
+        'trace on the device', (tester) async {
       await _seedLocal(tester, _pass);
-      var keysBefore = _app.storage!.getKeys();
+      var before = localSnapshot(_app);
       await _pumpApp(tester);
 
       await tester.enterText(find.byType(TextField), 'wrong passphrase');
@@ -171,7 +185,7 @@ void main() {
 
       expect(_app.loadedDatabase.value, isNull);
       expect(find.text('Deriving key...'), findsNothing);
-      expect(_app.storage!.getKeys(), keysBefore);
+      expect(localSnapshot(_app), before);
     });
 
     testWidgets('Erase local data removes databases and key caches',
@@ -185,9 +199,9 @@ void main() {
       await tester.tap(find.text('Erase local data'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(TextButton, 'Erase'));
-      await tester.pumpAndSettle();
+      await _settle(tester);
 
-      expect(_app.storage!.getKeys(), isEmpty);
+      expect(localSnapshot(_app), isEmpty);
       // Back to the variant without a local database.
       expect(find.textContaining('No database on this device yet'),
           findsOneWidget);
@@ -214,7 +228,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('not synced yet'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, 'Erase'));
-      await tester.pumpAndSettle();
+      await _settle(tester);
       // The first step took only the current version's entries.
       expect(_app.localDatabaseNames(), isEmpty);
       expect(_app.storage!.getKeys().toSet(), legacy.keys.toSet());
@@ -233,9 +247,9 @@ void main() {
     testWidgets('Remove clears them', (tester) async {
       await eraseUntilSecondDialog(tester);
       await tester.tap(find.widgetWithText(TextButton, 'Remove'));
-      await tester.pumpAndSettle();
+      await _settle(tester);
 
-      expect(_app.storage!.getKeys(), isEmpty);
+      expect(localSnapshot(_app), isEmpty);
     });
   });
 
@@ -357,7 +371,7 @@ void main() {
         text = base64.encode(await _app.exportEncryptedDatabase());
         await _app.removeLocalDatabase();
       });
-      expect(_app.storage!.getKeys(), isEmpty);
+      expect(localSnapshot(_app), isEmpty);
       return text;
     }
 
@@ -405,7 +419,7 @@ void main() {
               .isNotEmpty);
 
       expect(_app.loadedDatabase.value, isNull);
-      expect(_app.storage!.getKeys(), isEmpty);
+      expect(localSnapshot(_app), isEmpty);
       expect(find.text('Import database'), findsOneWidget);
     });
   });
@@ -676,7 +690,7 @@ void main() {
       await tester.tap(find.text('Erase local data'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(TextButton, 'Erase'));
-      await tester.pumpAndSettle();
+      await _settle(tester);
 
       // The v1 database is gone, the old copy is still there and offered.
       expect(_app.localDatabaseNames(), isEmpty);
@@ -684,9 +698,9 @@ void main() {
       expect(find.text('Remove data of the older app version too?'),
           findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, 'Remove'));
-      await tester.pumpAndSettle();
+      await _settle(tester);
 
-      expect(_app.storage!.getKeys(), isEmpty);
+      expect(localSnapshot(_app), isEmpty);
       expect(find.byKey(const Key('legacyDataHint')), findsNothing);
     });
   });
@@ -874,7 +888,7 @@ void main() {
       expect(warning, findsNothing);
       expect(find.text('New database'), findsOneWidget);
       expect(_app.loadedDatabase.value, isNull);
-      expect(_app.storage!.getKeys(), isEmpty);
+      expect(localSnapshot(_app), isEmpty);
     });
 
     testWidgets('New: Continue creates the database', (tester) async {

@@ -36,11 +36,12 @@ Future<void> _sessionWithTwoEntries(UltracipherApp app) async {
   await app.saveDatabase();
 }
 
-/// Simuliert ein frisches Gerät: Sitzung schließen und alle Preferences
-/// löschen.
+/// Simuliert ein frisches Gerät: Sitzung schließen und alle Preferences und
+/// lokalen Kopien löschen.
 Future<void> _freshDevice(UltracipherApp app) async {
   app.closeDatabase();
   await app.storage!.clear();
+  await app.localStore!.clear();
 }
 
 List<String> _labelsOf(UltracipherDatabase db) =>

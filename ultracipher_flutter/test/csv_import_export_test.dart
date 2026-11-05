@@ -4,7 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/core.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 
@@ -23,23 +25,6 @@ const _header4 = 'create date,name,tags,body';
 const _oldThreeColumn =
     '"Bank, main",finance bank,"user: me\nPIN ""1234"""\r\nMail,,secret\r\n'
     '007,1e5,12345678901234567890';
-
-/// Reads through to [inner], but every write fails (a full disk).
-class _UnwritableStorage implements SharedPreferences {
-  final SharedPreferences inner;
-
-  _UnwritableStorage(this.inner);
-
-  @override
-  String? getString(String key) => inner.getString(key);
-
-  @override
-  Future<bool> setString(String key, String value) =>
-      Future.error(StateError('disk full'));
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
 
 /// Stand der Datenbank als JSON-Text, zum Vergleichen vorher/nachher.
 String _state(UltracipherDatabase db) => jsonEncode(db.toJson());
@@ -564,11 +549,11 @@ void main() {
     test('a failing local save takes the import back', () async {
       var app = await open();
       // The local cache cannot be written (disk full): saveDatabase fails.
-      app.storage = _UnwritableStorage(app.storage!);
+      (app.localStore as FakeLocalStore).failWrites = LocalStoreErrorKind.full;
       var db = app.loadedDatabase.value!;
       var before = _state(db);
       await expectLater(app.importCsvText('$_header5\nb,,Lb,,y\na,,La,t,c\n'),
-          throwsA(isA<StateError>()));
+          throwsA(isA<LocalStoreException>()));
       expect(_state(db), before);
     });
 

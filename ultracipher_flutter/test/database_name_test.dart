@@ -126,6 +126,9 @@ void main() {
     test('only v1 copies: no legacy data', () async {
       var app = await _freshApp({UltracipherApp.localPrefsKey('a'): v1Text});
       expect(app.hasLegacyLocalData, isFalse);
+      // The migration moved it: listed from the store, gone from the prefs.
+      expect(app.localDatabaseNames(), equals(['a']));
+      expect(app.storage!.getKeys(), isEmpty);
     });
 
     test('eraseLocalData keeps legacy copies, includeLegacy removes them',

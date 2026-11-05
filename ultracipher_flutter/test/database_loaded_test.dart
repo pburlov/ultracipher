@@ -8,7 +8,6 @@
 // in Worker-Isolates (Echtzeit): Warten ueber tester.runAsync (_pumpUntil),
 // nie pumpAndSettle bei laufendem Fortschrittsdialog.
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -22,12 +21,14 @@ import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
 import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/database_loaded.dart';
 import 'package:ultracipher_flutter/src/github_settings.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 import 'package:ultracipher_flutter/src/login.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/sync_status_button.dart';
 import 'package:ultracipher_flutter/src/view_entry.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 import 'write_limit.dart';
@@ -95,34 +96,6 @@ Future<void> _open(WidgetTester tester) async {
 Future<void> _openAndSync(WidgetTester tester) async {
   await _open(tester);
   await _pumpUntil(tester, () => _app.syncStatus.value.state == SyncState.synced);
-}
-
-/// SharedPreferences, deren Schreiben auf Wunsch scheitert.
-class _FailingPrefs extends Fake implements SharedPreferences {
-  final SharedPreferences inner;
-  bool failWrites = false;
-
-  _FailingPrefs(this.inner);
-
-  @override
-  String? getString(String key) => inner.getString(key);
-
-  @override
-  Future<bool> setString(String key, String value) => failWrites
-      ? Future<bool>.error(StateError('disk full'))
-      : inner.setString(key, value);
-
-  @override
-  bool containsKey(String key) => inner.containsKey(key);
-
-  @override
-  Set<String> getKeys() => inner.getKeys();
-
-  @override
-  Object? get(String key) => inner.get(key);
-
-  @override
-  Future<bool> remove(String key) => inner.remove(key);
 }
 
 final Finder _menuButton = find.byWidgetPredicate((w) => w is PopupMenuButton);
@@ -770,7 +743,10 @@ void main() {
           tester,
           () =>
               find.byType(LoginScreen).evaluate().isNotEmpty &&
-              _app.localDatabaseNames().isEmpty);
+              _app.localDatabaseNames().isEmpty &&
+              // The store finishes removing in the real zone: wait until the
+              // progress barrier is gone.
+              find.byType(CircularProgressIndicator).evaluate().isEmpty);
       await tester.pumpAndSettle();
       expect(find.byType(SnackBar), findsNothing);
     });
@@ -962,11 +938,44 @@ void main() {
       expect(_app.loadedDatabase.value!.getEntries(), hasLength(1));
       var stored = await tester.runAsync(() async {
         var key = await _app.deriveRoot(_pass);
-        var text = _app.storage!
-            .getString(UltracipherApp.localPrefsKey(_app.localDatabaseNames().single));
-        return UltracipherApp.decryptDatabase(base64.decode(text!), key);
+        return UltracipherApp.decryptDatabase(
+            localBytes(_app, _app.localDatabaseNames().single), key);
       });
       expect(stored!.getEntries().single.latestEntry!.label, 'bank');
+    });
+  });
+
+  group('restored from the previous save', () {
+    const hint = 'Restored the previous save; the last change on this '
+        'device may be missing';
+
+    testWidgets('a damaged main copy opens from the .bak and shows the hint',
+        (tester) async {
+      await _seed(tester, labels: ['bank']);
+      var name = _app.localDatabaseNames().single;
+      await tester.runAsync(() {
+        // The next write turns the good main copy into the .bak; the new main
+        // copy has a flipped tag byte (wrong MAC).
+        var good = localBytes(_app, name);
+        return seedLocal(
+            _app, name, Uint8List.fromList(good)..[good.length - 1] ^= 1);
+      });
+
+      await _open(tester);
+      await tester.pump();
+
+      expect(find.text('bank'), findsOneWidget);
+      expect(find.text(hint), findsOneWidget);
+    });
+
+    testWidgets('an intact copy shows no hint', (tester) async {
+      await _seed(tester, labels: ['bank']);
+
+      await _open(tester);
+      await tester.pump();
+
+      expect(find.text('bank'), findsOneWidget);
+      expect(find.text(hint), findsNothing);
     });
   });
 
@@ -974,9 +983,7 @@ void main() {
     testWidgets('a failed local save puts the entry back', (tester) async {
       await _seed(tester, labels: ['bank']);
       await _open(tester);
-      var prefs = _FailingPrefs(_app.storage!);
-      _app.storage = prefs;
-      addTearDown(() => _app.storage = prefs.inner);
+      var store = _app.localStore as FakeLocalStore;
       var database = _app.loadedDatabase.value!;
       var id = database.getEntries().single.id;
 
@@ -984,11 +991,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.delete_forever));
       await tester.pumpAndSettle();
-      prefs.failWrites = true;
+      store.failWrites = LocalStoreErrorKind.full;
       await tester.tap(find.widgetWithText(TextButton, 'Delete'));
       await tester.pump();
       await _pumpUntil(
           tester, () => find.byIcon(Icons.check_circle).evaluate().isNotEmpty);
+      // The fixed message, not a raw error text.
+      expect(
+          find.text('Not enough storage on this device; the change was not '
+              'saved'),
+          findsOneWidget);
       await tester.tap(find.byIcon(Icons.check_circle));
       await tester.pumpAndSettle();
 

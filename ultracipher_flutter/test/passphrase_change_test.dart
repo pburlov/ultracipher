@@ -14,10 +14,12 @@ import 'package:ultracipher_flutter/src/backend/github_backend.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
 import 'package:ultracipher_flutter/src/commons.dart' show describeError;
 import 'package:ultracipher_flutter/src/core.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 import 'write_limit.dart';
@@ -181,16 +183,13 @@ Future<UltracipherApp> _freshApp(_Repo repo) async {
 
 Future<void> _seedLocal(
     UltracipherApp app, _KN kn, UltracipherDatabase db) async {
-  await app.storage!.setString(
-      UltracipherApp.localPrefsKey(kn.name), base64.encode(_enc(db, kn)));
+  await seedLocal(app, kn.name, _enc(db, kn));
 }
 
 /// Die lokale Kopie unter [kn] (entschluesselt) oder null.
 UltracipherDatabase? _local(UltracipherApp app, _KN kn) {
-  var text = app.storage!.getString(UltracipherApp.localPrefsKey(kn.name));
-  return text == null
-      ? null
-      : UltracipherApp.decryptDatabase(base64.decode(text), kn.key);
+  var bytes = app.localStore!.read(kn.name);
+  return bytes == null ? null : UltracipherApp.decryptDatabase(bytes, kn.key);
 }
 
 /// Die Remote-Datei unter [kn] (entschluesselt) oder null.
@@ -203,8 +202,8 @@ UltracipherDatabase? _remote(_Repo repo, _KN kn) {
 Set<String> _keyCacheEntries(UltracipherApp app) =>
     app.storage!.getKeys().where(UltracipherApp.isKeyCachePrefsKey).toSet();
 
-Map<String, Object?> _prefs(UltracipherApp app) =>
-    {for (var k in app.storage!.getKeys()) k: app.storage!.get(k)};
+/// Alles, was lokal liegt: Prefs und die Kopien im Speicher (mit .bak).
+Map<String, Object?> _prefs(UltracipherApp app) => localSnapshot(app);
 
 Future<Object?> _error(Future<Object?> f) async {
   try {
@@ -239,37 +238,6 @@ Future<PassphraseChangeResult> _change(UltracipherApp app,
     app.changeDatabasePassphrase(
         oldPassphrase: _passA, newPassphrase: _passB, mergeLocal: mergeLocal);
 
-/// SharedPreferences, deren Schreiben bzw. Entfernen auf Wunsch scheitert.
-class _FailingPrefs extends Fake implements SharedPreferences {
-  final SharedPreferences inner;
-  bool failWrites = false;
-  bool failRemoves = false;
-
-  _FailingPrefs(this.inner);
-
-  @override
-  String? getString(String key) => inner.getString(key);
-
-  @override
-  Future<bool> setString(String key, String value) => failWrites
-      ? Future<bool>.error(StateError('disk full'))
-      : inner.setString(key, value);
-
-  @override
-  bool containsKey(String key) => inner.containsKey(key);
-
-  @override
-  Set<String> getKeys() => inner.getKeys();
-
-  @override
-  Object? get(String key) => inner.get(key);
-
-  @override
-  Future<bool> remove(String key) => failRemoves
-      ? Future<bool>.error(StateError('locked'))
-      : inner.remove(key);
-}
-
 /// Beide Namen lesbar, nichts verloren: alte lokale Kopie da,
 /// alte Datei mit [labels]; neue Datei/Kopie, falls vorhanden, ebenso.
 Future<void> _bothReadable(
@@ -301,6 +269,7 @@ void main() {
       _add(app.loadedDatabase.value!, 'y');
       await app.saveDatabase();
       var database = app.loadedDatabase.value;
+      expect(app.localStore!.readBackup(_a.name), isNotNull);
 
       var result = await _change(app);
 
@@ -308,6 +277,10 @@ void main() {
       expect(identical(app.loadedDatabase.value, database), isTrue);
       expect(_labels(_local(app, _b)!), ['x', 'y']);
       expect(_local(app, _a), isNull);
+      // No copy stays under the old name: neither main nor .bak.
+      expect(app.localStore!.readBackup(_a.name), isNull);
+      expect(app.localStore!.contains(_a.name), isFalse);
+      expect(app.localStore!.names.toList(), [_b.name]);
       expect(_keyCacheEntries(app), isEmpty);
       expect(app.syncStatus.value.state, SyncState.noRemote);
       expect(repo.files, isEmpty);
@@ -420,12 +393,10 @@ void main() {
         () async {
       var repo = _Repo();
       var app = await _openRemoteA(repo, ['x']);
-      await app.storage!
-          .setString(UltracipherApp.localPrefsKey(_b.name), 'AAAA');
+      await seedLocal(app, _b.name, junkBytes('AAAA'));
       expect(await _error(_change(app, mergeLocal: true)),
           isA<LocalDatabaseUnreadableException>());
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(_b.name)),
-          'AAAA');
+      expect(localBytes(app, _b.name), junkBytes('AAAA'));
       expect(repo.file(_b.name).storedBytes, isNull);
       expect(_labels(_local(app, _a)!), ['x']);
       expect(_labels(_remote(repo, _a)!), ['x']);
@@ -485,11 +456,10 @@ void main() {
         'the session stays under the old name', () async {
       var repo = _Repo();
       var app = await _openRemoteA(repo, ['x']);
-      var prefs = _FailingPrefs(app.storage!);
-      app.storage = prefs;
-      prefs.failWrites = true;
-      expect(await _error(_change(app)), isA<StateError>());
-      prefs.failWrites = false;
+      var store = app.localStore as FakeLocalStore;
+      store.failWrites = LocalStoreErrorKind.full;
+      expect(await _error(_change(app)), isA<LocalStoreException>());
+      store.failWrites = null;
       expect(_labels(_remote(repo, _b)!), ['x']);
       expect(_local(app, _b), isNull);
       await _bothReadable(app, repo, ['x']);
@@ -543,9 +513,7 @@ void main() {
         'the old local copy stays readable', () async {
       var repo = _Repo();
       var app = await _openRemoteA(repo, ['x']);
-      var prefs = _FailingPrefs(app.storage!);
-      app.storage = prefs;
-      prefs.failRemoves = true;
+      (app.localStore as FakeLocalStore).failRemoves = LocalStoreErrorKind.io;
 
       var result = await _change(app);
 
@@ -641,8 +609,8 @@ void main() {
       'passphrase there merges its local edits into the new database',
       () async {
     var repo = _Repo();
-    // Geraet 2 zuerst; seine Prefs bleiben im Cache seines
-    // SharedPreferences-Objekts (das Geraet 1 danach nicht liest).
+    // Geraet 2 zuerst; seine lokalen Kopien liegen in seinem eigenen Speicher
+    // (Geraet 1 bekommt einen frischen).
     var device2 = await _openRemoteA(repo, ['x']);
     repo.file(_a.name).readFailure = RemoteBackendException('offline');
     _add(device2.loadedDatabase.value!, 'd2 offline edit');

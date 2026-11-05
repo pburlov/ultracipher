@@ -6,7 +6,8 @@
 // einmal echt und wird danach gemerkt (memoized_key_derivation.dart).
 //
 // SharedPreferences.setMockInitialValues ist global: zwei "Geraete" laufen
-// nacheinander (_freshApp fuer das zweite), nie gleichzeitig.
+// nacheinander (_freshApp fuer das zweite), nie gleichzeitig. Ihre lokalen
+// Kopien liegen dagegen je in einem eigenen FakeLocalStore.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -19,10 +20,12 @@ import 'package:ultracipher_flutter/src/backend/github_backend.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
 import 'package:ultracipher_flutter/src/commons.dart' show describeError;
 import 'package:ultracipher_flutter/src/core.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 import 'write_limit.dart';
@@ -127,34 +130,6 @@ List<_GithubFake> _installGithubFakes(UltracipherApp app, _World world) {
   return all;
 }
 
-/// SharedPreferences, deren Schreiben auf Wunsch scheitert.
-class _FailingPrefs extends Fake implements SharedPreferences {
-  final SharedPreferences inner;
-  bool failWrites = false;
-
-  _FailingPrefs(this.inner);
-
-  @override
-  String? getString(String key) => inner.getString(key);
-
-  @override
-  Future<bool> setString(String key, String value) => failWrites
-      ? Future<bool>.error(StateError('disk full'))
-      : inner.setString(key, value);
-
-  @override
-  bool containsKey(String key) => inner.containsKey(key);
-
-  @override
-  Set<String> getKeys() => inner.getKeys();
-
-  @override
-  Object? get(String key) => inner.get(key);
-
-  @override
-  Future<bool> remove(String key) => inner.remove(key);
-}
-
 class _KN {
   final Uint8List key;
   final String name;
@@ -168,15 +143,11 @@ Future<_KN> _keyAndName(UltracipherApp app, String pass) async {
 
 Future<void> _seedLocal(
     UltracipherApp app, _KN kn, UltracipherDatabase db) async {
-  await app.storage!.setString(UltracipherApp.localPrefsKey(kn.name),
-      base64.encode(UltracipherApp.encryptDatabase(db, kn.key)));
+  await seedLocal(app, kn.name, UltracipherApp.encryptDatabase(db, kn.key));
 }
 
 UltracipherDatabase _storedDb(UltracipherApp app, _KN kn) =>
-    UltracipherApp.decryptDatabase(
-        base64.decode(
-            app.storage!.getString(UltracipherApp.localPrefsKey(kn.name))!),
-        kn.key);
+    UltracipherApp.decryptDatabase(localBytes(app, kn.name), kn.key);
 
 UltracipherDatabase _remoteDb(FakeRemoteBackend fake, _KN kn) =>
     UltracipherApp.decryptDatabase(fake.storedBytes!, kn.key);
@@ -184,8 +155,7 @@ UltracipherDatabase _remoteDb(FakeRemoteBackend fake, _KN kn) =>
 void _seedRemote(FakeRemoteBackend fake, _KN kn, UltracipherDatabase db) =>
     fake.seed(UltracipherApp.encryptDatabase(db, kn.key));
 
-Map<String, Object?> _prefs(UltracipherApp app) =>
-    {for (var k in app.storage!.getKeys()) k: app.storage!.get(k)};
+Map<String, Object?> _prefs(UltracipherApp app) => localSnapshot(app);
 
 Future<void> _until(bool Function() condition) async {
   for (var i = 0; i < 500 && !condition(); i++) {
@@ -862,14 +832,14 @@ void main() {
       await _seedLocal(app, kn, _dbWith(['x'], github: _gh()));
       await app.openLocalDatabase(_pass);
       await _until(() => app.syncStatus.value.state == SyncState.synced);
-      var prefs = _FailingPrefs(app.storage!);
-      app.storage = prefs;
-      prefs.failWrites = true;
+      var store = app.localStore as FakeLocalStore;
+      store.failWrites = LocalStoreErrorKind.full;
 
       var error = await _error(app.configureGithub(
           token: 'tok', repo: 'r2', branch: 'main', httpClient: _okClient()));
 
-      expect(error, isA<StateError>());
+      expect(error, isA<LocalStoreException>());
+      expect(describeError(error!), contains('Not enough storage'));
       expect(backends[0].closed, isTrue);
       expect(app.remoteBackend, same(backends.last));
       expect(backends.last.closed, isFalse);
@@ -879,7 +849,7 @@ void main() {
       expect(_storedDb(app, kn).settings!.github!.repo, 'r');
 
       // The next save brings the copy up to date.
-      prefs.failWrites = false;
+      store.failWrites = null;
       await app.saveDatabase();
       expect(_storedDb(app, kn).settings!.github!.repo, 'r2');
     });
@@ -1034,14 +1004,12 @@ void main() {
       var kn = await _keyAndName(a, _pass);
       _seedRemote(remote, kn, _dbWith(['x']));
       await _openWithGithub(a, world, _dbWith(['x'], github: _gh()));
-      var prefs = _FailingPrefs(a.storage!);
-      a.storage = prefs;
-      prefs.failWrites = true;
+      (a.localStore as FakeLocalStore).failWrites = LocalStoreErrorKind.full;
       var writes = remote.writeCount;
 
       var error = await _error(a.removeGithub());
 
-      expect(error, isA<StateError>());
+      expect(error, isA<LocalStoreException>());
       expect(a.loadedDatabase.value!.settings!.github, isNotNull);
       expect(a.remoteBackend, isNotNull);
       expect(_storedDb(a, kn).settings!.github, isNotNull);

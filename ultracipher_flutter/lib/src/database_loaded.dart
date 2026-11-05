@@ -121,8 +121,23 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     status.addListener(_onSyncStatus);
     // Der erste Sync kann schon vor dem Aufbau des Screens geendet haben.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _maybeShowSyncProblem(status.value);
+      if (!mounted) return;
+      // Erst der Sync-Hinweis: er nimmt eine laufende SnackBar weg, der
+      // Hinweis auf die Wiederherstellung reiht sich dahinter ein.
+      _maybeShowSyncProblem(status.value);
+      _maybeShowRestoreNotice();
     });
+  }
+
+  /// E3: war die hier geöffnete Datenbank aus der `.bak` wiederhergestellt,
+  /// fehlt womöglich die letzte Änderung.
+  void _maybeShowRestoreNotice() {
+    if (!UltracipherApp.instance.restoredFromBackup) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Restored the previous save; the last change on this '
+          'device may be missing'),
+      duration: Duration(seconds: 12),
+    ));
   }
 
   @override

@@ -17,6 +17,7 @@ import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/db_codec.dart' show maxBase64Length;
 import 'package:ultracipher_flutter/src/model/model.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 
@@ -114,7 +115,7 @@ void main() {
       'nothing else is derived or changed', () async {
     var app = await _freshApp();
     await app.createDatabase(_pass);
-    var before = {for (var k in app.storage!.getKeys()) k: app.storage!.get(k)};
+    var before = localSnapshot(app);
     resetRootDerivationCount();
 
     expect(
@@ -124,8 +125,7 @@ void main() {
         'Invalid old passphrase');
 
     expect(rootDerivationCount, 1);
-    expect({for (var k in app.storage!.getKeys()) k: app.storage!.get(k)},
-        before);
+    expect(localSnapshot(app), before);
   });
 
   test('the same passphrase as the new one is refused', () async {

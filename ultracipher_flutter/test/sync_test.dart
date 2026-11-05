@@ -14,10 +14,12 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
 import 'package:ultracipher_flutter/src/core.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 import 'write_limit.dart';
@@ -42,7 +44,7 @@ class _Env {
 
   _Env(this.app, this.remote, this.key);
 
-  /// Name of the open database (its `ucdb_<name>` prefs entry is the cache).
+  /// Name of the open database (its copy in the local store is the cache).
   String get name => databaseName(key);
 
   UltracipherDatabase get db => app.loadedDatabase.value!;
@@ -55,8 +57,7 @@ class _Env {
   UltracipherDatabase cachedDb() =>
       UltracipherApp.decryptDatabase(cacheBytes(), key);
 
-  Uint8List cacheBytes() => base64.decode(
-      app.storage!.getString(UltracipherApp.localPrefsKey(name))!);
+  Uint8List cacheBytes() => localBytes(app, name);
 
   /// Lands a change by "another device" in the remote: adds [label] to a copy
   /// of the remote state (same entry ids) and stores it with a new version.
@@ -602,8 +603,7 @@ void main() {
       var reads = env.remote.readCount;
       await env.localAdds('local too');
       await _until(() => env.remote.readCount > reads);
-      var cacheKey = UltracipherApp.localPrefsKey(env.name);
-      var cacheBefore = env.app.storage!.getString(cacheKey);
+      var cacheBefore = localBytes(env.app, env.name);
       var writes = env.remote.writeCount;
       var remoteBefore = env.remote.storedBytes;
 
@@ -616,7 +616,7 @@ void main() {
       expect(status.state, SyncState.noRemote);
       expect(env.app.syncStatus.value.state, SyncState.noRemote);
       expect(env.app.loadedDatabase.value, isNull);
-      expect(env.app.storage!.getString(cacheKey), equals(cacheBefore));
+      expect(localBytes(env.app, env.name), equals(cacheBefore));
       expect(env.remote.writeCount, equals(writes));
       expect(env.remote.storedBytes, equals(remoteBefore));
     });
@@ -630,8 +630,7 @@ void main() {
       var reads = env.remote.readCount;
       await env.localAdds('local');
       await _until(() => env.remote.readCount > reads);
-      var cacheKey = UltracipherApp.localPrefsKey(env.name);
-      var cacheBefore = env.app.storage!.getString(cacheKey);
+      var cacheBefore = localBytes(env.app, env.name);
 
       // Another database (imported from text) replaces the open one.
       var otherKey = await env.app.deriveRoot('other passphrase');
@@ -645,7 +644,7 @@ void main() {
       expect(status.state, SyncState.noRemote);
       expect(env.app.loadedDatabase.value, same(opened));
       expect(_labels(opened), equals(['from text']));
-      expect(env.app.storage!.getString(cacheKey), equals(cacheBefore));
+      expect(localBytes(env.app, env.name), equals(cacheBefore));
       expect(env.remote.writeCount, equals(0));
     });
   });
@@ -878,6 +877,28 @@ void main() {
       expect(env.app.syncStatus.value.state, isNot(SyncState.synced));
       gate.complete();
       expect((await env.app.syncNow()).state, SyncState.synced);
+    });
+  });
+
+  group('local storage full', () {
+    test('a merge that cannot be stored (storage full) gives notSynced with '
+        'the fixed message and pushes nothing',
+        () async {
+      var env = await _open();
+      var cache = env.cacheBytes();
+      var writes = env.remote.writeCount;
+      env.otherDeviceAdds('from remote');
+      var store = env.app.localStore as FakeLocalStore;
+      store.failWrites = LocalStoreErrorKind.full;
+
+      var status = await env.app.syncNow();
+
+      expect(status.state, SyncState.notSynced);
+      expect(status.error,
+          'Not enough storage on this device; the change was not saved');
+      expect(status.error, isNot(contains('Sync failed')));
+      expect(env.remote.writeCount, writes);
+      expect(env.cacheBytes(), cache);
     });
   });
 

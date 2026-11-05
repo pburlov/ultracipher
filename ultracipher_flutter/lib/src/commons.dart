@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
 import 'package:ultracipher_flutter/src/core.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 
 Future<bool?> showProgressDialog(
   BuildContext context,
@@ -146,7 +147,8 @@ String describeError(Object error) {
       error is LocalDatabaseExistsException ||
       error is LocalDatabaseUnreadableException ||
       error is GithubFileMissingException ||
-      error is DatabaseTooLargeException) {
+      error is DatabaseTooLargeException ||
+      error is LocalStoreException) {
     return error.toString();
   }
   return 'Something went wrong (${error.runtimeType})';

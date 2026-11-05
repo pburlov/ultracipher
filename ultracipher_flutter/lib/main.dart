@@ -1,12 +1,54 @@
 import 'package:flutter/material.dart';
 import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/database_loaded.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 import 'package:ultracipher_flutter/src/login.dart';
 
 void main() async{
   WidgetsFlutterBinding.ensureInitialized();
-  await UltracipherApp.instance.init();
-  runApp(MyApp());
+  runApp(await buildApp());
+}
+
+/// Startet die App-Logik und liefert die Wurzel. Scheitert [UltracipherApp.init]
+/// (z. B. der lokale Speicher ist nicht benutzbar), kommt eine schlichte
+/// Fehlerseite statt eines weißen Bildschirms; ohne Speicher gäbe es sonst
+/// keine Datenbanken und kein Speichern.
+Future<Widget> buildApp() async {
+  try {
+    await UltracipherApp.instance.init();
+  } catch (e) {
+    // Nur feste Texte: ein OS-Fehler enthielte Pfade (und damit DB-Namen).
+    print('Starting the app failed (${e.runtimeType})');
+    return StartupErrorApp(
+        message: e is LocalStoreException
+            ? e.toString()
+            : 'Starting the app failed');
+  }
+  return MyApp();
+}
+
+/// Fehlerseite des Starts ([buildApp]).
+class StartupErrorApp extends StatelessWidget {
+  final String message;
+
+  const StartupErrorApp({Key? key, required this.message}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Ultracipher',
+      home: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(message, textAlign: TextAlign.center),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {

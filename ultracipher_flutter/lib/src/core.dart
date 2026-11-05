@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart'
-    show compute, kIsWeb, visibleForTesting;
+    show compute, kIsWeb, listEquals, visibleForTesting;
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +16,8 @@ import 'crypto/constant_time.dart';
 import 'crypto/format_v1.dart';
 import 'crypto/kdf_profile.dart' as kdf;
 import 'db_codec.dart';
+import 'local_store/local_store.dart';
+import 'local_store/local_store_platform.dart';
 import 'sync.dart';
 import 'sync_log.dart';
 import 'user_key_hash.dart';
@@ -177,12 +179,84 @@ class UltracipherApp {
     return _instance!;
   }
 
+  /// Nur noch für Altdaten: Migration der v1-Einträge `ucdb_<name>`, die
+  /// Erkennung der Altformate und "Erase local data". Die DB-Kopien liegen im
+  /// [localStore]. Tests tauschen es aus.
   SharedPreferences? storage;
+
+  /// Testnaht: baut den lokalen Speicher in [init]. `null` (Standard) nimmt
+  /// den der Plattform (`createPlatformStore`); `flutter test` hat dafür
+  /// keinen Platform-Channel, `test/flutter_test_config.dart` setzt hier einen
+  /// Fake.
+  @visibleForTesting
+  static Future<LocalDatabaseStore> Function()? localStoreFactory;
+
+  /// Speicher der verschlüsselten DB-Kopien (F4); erst nach [init] gesetzt.
+  LocalDatabaseStore? localStore;
 
   ValueNotifier<UltracipherDatabase?> loadedDatabase = ValueNotifier(null);
 
+  /// Öffnet Prefs und lokalen Speicher und übernimmt v1-Kopien aus den Prefs
+  /// (siehe [_migratePrefsCopies]). Wirft [LocalStoreException], wenn der
+  /// Speicher nicht benutzbar ist; es gibt keinen Rückfall auf die Prefs als
+  /// zweite Quelle, `main.dart` zeigt dann eine Fehlerseite.
   Future<void> init() async {
     storage = await SharedPreferences.getInstance();
+    var store = await (localStoreFactory ?? createPlatformStore)();
+    await store.open();
+    localStore = store;
+    await _migratePrefsCopies();
+  }
+
+  /// Einmalige, idempotente Übernahme der v1-Kopien `ucdb_<name>` (Base64-Text)
+  /// aus den Prefs in den [localStore]. Der Prefs-Eintrag fällt erst weg, wenn
+  /// der Store-Inhalt bytegleich vom Medium zurückgelesen wurde. Scheitert es,
+  /// bleibt der Eintrag stehen und wird weiter gelesen ([_localBytes]); der
+  /// nächste Start versucht es erneut. Altformate (ohne v1-Magic) bleiben
+  /// unberührt. Geloggt wird nur der Fehlertyp, nie Name oder Inhalt.
+  Future<void> _migratePrefsCopies() async {
+    var prefs = storage!;
+    var store = localStore!;
+    for (var key in prefs.getKeys().toList()) {
+      if (!_isLocalDatabaseKey(key)) continue;
+      var value = prefs.get(key);
+      if (!isV1LocalValue(value)) continue;
+      var name = key.substring(localPrefsPrefix.length);
+      if (!isValidLocalStoreName(name)) {
+        print('A local copy in the preferences has an invalid name; skipped');
+        continue;
+      }
+      var wrote = false;
+      try {
+        var bytes = decodeBase64Bounded(value as String);
+        if (!store.contains(name)) {
+          wrote = true;
+          await store.write(name, bytes);
+          // Am Cache vorbei vom Medium: nur eine wirklich gespeicherte Kopie
+          // darf die einzige andere Quelle ersetzen.
+          var persisted = await store.readPersisted(name);
+          if (!listEquals(persisted, bytes)) {
+            throw StateError('not verified');
+          }
+          wrote = false;
+          await prefs.remove(key);
+        } else if (listEquals(store.read(name), bytes)) {
+          // Abbruch nach dem Schreiben im letzten Lauf.
+          await prefs.remove(key);
+        }
+        // Sonst gewinnt der Store (Downgrade-Fall); der Prefs-Rest bleibt bis
+        // "Erase local data" Schritt 1.
+      } catch (e) {
+        print('Moving a local copy out of the preferences failed '
+            '(${e.runtimeType}); it is still read from there');
+        if (wrote) {
+          // Nur eine Quelle: ohne Verifikation kein Store-Eintrag.
+          try {
+            await store.remove(name);
+          } catch (_) {}
+        }
+      }
+    }
   }
 
   static const String PASSPHRASE_ALPHABET =
@@ -273,6 +347,12 @@ class UltracipherApp {
   bool get hasSyncedThisSession =>
       (syncStatus as _SyncStatusNotifier).sawSynced;
 
+  /// Die geöffnete Datenbank kam aus der `.bak`, weil die Hauptkopie beschädigt
+  /// war (E3): die letzte Änderung kann fehlen, die UI weist darauf hin.
+  /// [_newSession] setzt es zurück.
+  bool get restoredFromBackup => _restoredFromBackup;
+  bool _restoredFromBackup = false;
+
   /// Wie viele Schreibversuche ein Sync-Lauf höchstens macht. Jeder Versuch
   /// ist: Remote lesen, mergen, lokal speichern, schreiben; nur ein
   /// [RemoteConflictException] beim Schreiben führt zum nächsten Versuch.
@@ -285,7 +365,7 @@ class UltracipherApp {
   late final SingleFlight<SyncStatus> _flight = SingleFlight(_syncOnce);
 
   /// Name der geöffneten Datenbank (`databaseName(R)`), oder `null`, solange
-  /// keine Sitzung offen ist. Die lokale Kopie liegt unter `ucdb_<name>`, die
+  /// keine Sitzung offen ist. Die lokale Kopie liegt im [localStore] unter diesem Namen, die
   /// Remote-Datei unter `<name>.txt`; der Name ist auch der Schlüssel der
   /// Backend-Aufrufe. Wird nur von [_newSession] geleert und von
   /// [_startSession] bzw. [changeDatabasePassphrase] gesetzt.
@@ -331,6 +411,7 @@ class UltracipherApp {
   void _newSession(SyncStatus status) {
     _session++;
     _syncEpoch++;
+    _restoredFromBackup = false;
     (syncStatus as _SyncStatusNotifier).sawSynced = false;
     // Der Name wird danach gesetzt (siehe [_startSession]).
     _databaseName = null;
@@ -345,8 +426,8 @@ class UltracipherApp {
     syncLog.clear();
   }
 
-  /// Speichert die geöffnete Datenbank sofort lokal (verschlüsselt unter
-  /// `ucdb_<name>`) und fordert danach einen Sync an ([requestSync], ohne zu warten).
+  /// Speichert die geöffnete Datenbank sofort lokal (verschlüsselt im
+  /// [localStore]) und fordert danach einen Sync an ([requestSync], ohne zu warten).
   ///
   /// Scheitert nicht am Netz: ob und wann der Remote nachzieht, zeigt nur
   /// [syncStatus]. Ein fehlendes Backend ist kein Fehler (Status `noRemote`,
@@ -390,7 +471,7 @@ class UltracipherApp {
     }
   }
 
-  /// Schreibt die lokale Kopie der Sitzung unter `ucdb_<name>`, aber nur, wenn
+  /// Schreibt die lokale Kopie der Sitzung in den [localStore], aber nur, wenn
   /// [key] (`R`) zu [name] gehört (sonst würde die Kopie unlesbar überschrieben):
   /// sonst Fehler, synchron geworfen, vor jedem Schreiben.
   ///
@@ -402,7 +483,7 @@ class UltracipherApp {
       throw RemoteBackendException(
           'The key does not match this database; nothing was saved');
     }
-    return storage!.setString(localPrefsKey(name), base64.encode(data));
+    return localStore!.write(name, data);
   }
 
   /// Stößt einen Sync an, ohne zu warten (für Trigger wie "Änderung
@@ -570,6 +651,12 @@ class UltracipherApp {
       // nichts gesendet, die Sitzung blieb ungemergt.
       return publish(
           SyncStatus(SyncState.notSynced, error: e.toString(), cause: e));
+    } on LocalStoreException catch (e) {
+      // Der gemergte Stand ließ sich lokal nicht speichern (z. B. Speicher
+      // voll): nichts ging ans Remote. Feste Meldung, ohne Pfad.
+      print('Sync failed (${e.runtimeType})');
+      return publish(
+          SyncStatus(SyncState.notSynced, error: e.toString(), cause: e));
     } on RemoteBackendException catch (e) {
       // Die Meldungen der Backends enthalten nie Token oder URL.
       print('Sync failed (${e.runtimeType})');
@@ -673,14 +760,16 @@ class UltracipherApp {
   }
 
   /// "Erase local data": beendet eine offene Sitzung und entfernt alle
-  /// lokalen v1-Datenbanken (`ucdb_*` mit v1-Magic) und alle `_key`-Caches im
-  /// Format von [isKeyCachePrefsKey]. Nicht gesyncte Aenderungen gehen
-  /// verloren, Daten auf GitHub bleiben unberuehrt. Alles andere (alte
-  /// `ucdb_*`-Kopien, Eintraege des alten Modells) bleibt, ausser mit
-  /// [includeLegacy]: dann werden auch diese entfernt (Plan E5).
+  /// lokalen v1-Datenbanken (den ganzen [localStore] samt `.bak`, dazu v1-Reste
+  /// `ucdb_*` einer gescheiterten Migration in den Prefs) und alle `_key`-Caches
+  /// im Format von [isKeyCachePrefsKey]. Nicht gesyncte Änderungen gehen
+  /// verloren, Daten auf GitHub bleiben unberührt. Alles andere (alte
+  /// `ucdb_*`-Kopien, Einträge des alten Modells) bleibt, außer mit
+  /// [includeLegacy]: dann wird auch das entfernt (Plan E5).
   Future<void> eraseLocalData({bool includeLegacy = false}) async {
     closeDatabase();
     var prefs = storage!;
+    await localStore!.clear();
     for (var key in prefs.getKeys().toList()) {
       if ((_isLocalDatabaseKey(key) && isV1LocalValue(prefs.get(key))) ||
           isKeyCachePrefsKey(key)) {
@@ -692,25 +781,68 @@ class UltracipherApp {
     }
   }
 
-  /// Prefix of the preference keys that hold a local database; it lets
-  /// [localDatabaseNames] find them without a passphrase.
+  /// Prefix of the preference keys that held a local database in the earlier
+  /// storage (and still hold old-format copies). Only the migration and the
+  /// legacy detection use it; databases live in the [localStore] now.
   static const String localPrefsPrefix = 'ucdb_';
 
-  /// Preference key of the local copy of the database called [name]
+  /// Preference key of the earlier local copy of the database called [name]
   /// (see `databaseName` in user_key_hash.dart).
   static String localPrefsKey(String name) => '$localPrefsPrefix$name';
 
-  /// Names of all databases stored locally under [localPrefsKey] in format
-  /// v1. Old copies (no `UCDB` magic, see [isV1LocalValue]) and old entries
+  /// Names of all databases stored locally in format v1: everything in the
+  /// [localStore] (it only ever receives our own v1 writes, so a damaged copy
+  /// stays listed and its "cannot be read" way out stays reachable), plus v1
+  /// entries still in the preferences (migration failed, see [_localBytes]).
+  /// Old copies (no `UCDB` magic, see [isV1LocalValue]) and old entries
   /// (`..._database`, token blobs, `user`, `..._key`) don't count; they only
   /// show up in [hasLegacyLocalData].
   List<String> localDatabaseNames() {
+    var names = <String>{...localStore!.names};
     var prefs = storage!;
-    return prefs
-        .getKeys()
-        .where((k) => _isLocalDatabaseKey(k) && isV1LocalValue(prefs.get(k)))
-        .map((k) => k.substring(localPrefsPrefix.length))
-        .toList();
+    for (var key in prefs.getKeys()) {
+      if (_isLocalDatabaseKey(key) && isV1LocalValue(prefs.get(key))) {
+        var name = key.substring(localPrefsPrefix.length);
+        if (isValidLocalStoreName(name)) names.add(name);
+      }
+    }
+    return names.toList();
+  }
+
+  // Zweite Lesequelle, eng begrenzt (E4): v1-Einträge `ucdb_<name>` in den
+  // Prefs, solange die Migration sie nicht übernommen hat. Damit verschwindet
+  // keine DB aus der Liste. Geschrieben wird nie dorthin. Die drei Helfer
+  // können entfallen, wenn die Migration lange genug lief (Termin offen).
+
+  /// Der Prefs-Eintrag einer noch nicht migrierten v1-Kopie, sonst `null`.
+  String? _prefsCopy(String name) {
+    var value = storage!.get(localPrefsKey(name));
+    return value is String && isV1LocalValue(value) ? value : null;
+  }
+
+  /// Ob es lokal eine Kopie gibt: im Store (Haupt- oder `.bak`) oder noch als
+  /// v1-Eintrag in den Prefs.
+  bool _hasLocal(String name) =>
+      localStore!.contains(name) || _prefsCopy(name) != null;
+
+  /// Die rohen Bytes der Hauptkopie. Hat der Store den Namen, gilt er allein
+  /// (auch ohne Hauptkopie: dann fehlt sie, und die Prefs sind veraltet);
+  /// sonst die noch nicht migrierte Prefs-Kopie. Wirft [FormatException] bei
+  /// kaputtem base64.
+  Uint8List? _localBytes(String name) {
+    var store = localStore!;
+    if (store.contains(name)) return store.read(name);
+    var text = _prefsCopy(name);
+    return text == null ? null : decodeBase64Bounded(text);
+  }
+
+  /// Entfernt die Kopien unter [name]: Haupt-, `.bak`- und `.tmp`-Kopie im
+  /// Store und einen v1-Rest in den Prefs (sonst tauchte er wieder auf).
+  Future<void> _removeLocal(String name) async {
+    await localStore!.remove(name);
+    if (_prefsCopy(name) != null) {
+      await storage!.remove(localPrefsKey(name));
+    }
   }
 
   // Muss Random.secure() bleiben: speist die Passphrasen-Generierung
@@ -731,7 +863,7 @@ class UltracipherApp {
   // --- Sitzungs-API (Plan Schritt 10) ---------------------------------------
   //
   // Eine Passphrase ist eine Datenbank: Name = databaseName(R), lokal
-  // `ucdb_<name>`, remote `<name>.txt`. Die Passphrase wird überall getrimmt
+  // im [localStore] unter diesem Namen, remote `<name>.txt`. Die Passphrase wird überall getrimmt
   // damit Anlegen, Öffnen und Import dasselbe `R` ableiten; die Sitzung hält
   // danach nur `R`. Der normale Sync legt nie eine Remote-Datei an.
   //
@@ -741,8 +873,7 @@ class UltracipherApp {
   /// Öffnet die lokale Datenbank zu [passphrase].
   ///
   /// Wirft [NoLocalDatabaseException], wenn es unter dem Namen keine gibt
-  /// (falsches Passwort eingeschlossen): dann ist nichts in die Prefs
-  /// geschrieben. Wirft
+  /// (falsches Passwort eingeschlossen): dann ist nichts gespeichert. Wirft
   /// [LocalDatabaseUnreadableException], wenn sie existiert, aber nicht
   /// lesbar ist (Ausweg: [removeLocalDatabase] mit Passphrase).
   ///
@@ -759,7 +890,7 @@ class UltracipherApp {
     if (database == null) {
       throw NoLocalDatabaseException();
     }
-    _startSession(name, key, database);
+    _startSession(name, key, database, restored: _lastReadRestored);
   }
 
   /// Legt eine neue, leere Datenbank zu [passphrase] an und öffnet sie.
@@ -771,7 +902,7 @@ class UltracipherApp {
   Future<void> createDatabase(String passphrase) async {
     var key = await deriveRoot(passphrase);
     var name = databaseName(key);
-    if (storage!.containsKey(localPrefsKey(name))) {
+    if (_hasLocal(name)) {
       throw LocalDatabaseExistsException();
     }
     var database = UltracipherDatabase();
@@ -831,10 +962,13 @@ class UltracipherApp {
     } else {
       database.merge(imported);
     }
-    // setString aktualisiert den Cache der Prefs sofort; erst nach dem
-    // Sitzungsstart wird auf das Schreiben gewartet.
+    // Die Wiederherstellung aus der .bak (_readNamedLocal) steht schon in der
+    // Warteschlange des Speichers, bevor dieses Schreiben die kaputte Hauptkopie
+    // zur .bak machen kann. Der Cache gilt sofort; erst nach dem Sitzungsstart
+    // wird auf das Schreiben gewartet.
+    var restored = _lastReadRestored;
     var written = _writeNamedLocal(name, database, key);
-    _startSession(name, key, database);
+    _startSession(name, key, database, restored: restored);
     try {
       await written;
     } catch (_) {
@@ -907,9 +1041,8 @@ class UltracipherApp {
     if (_databaseName == name) {
       closeDatabase();
     }
-    var prefsKey = localPrefsKey(name);
-    var existed = storage!.containsKey(prefsKey);
-    await storage!.remove(prefsKey);
+    var existed = _hasLocal(name);
+    await _removeLocal(name);
     return existed;
   }
 
@@ -1364,7 +1497,7 @@ class UltracipherApp {
       } else {
         data = encryptDatabase(candidate, newKey);
       }
-      await storage!.setString(localPrefsKey(newName), base64.encode(data));
+      await localStore!.write(newName, data);
       requireAlive();
 
       // Das Limit greift hier nicht mehr: die Sperre ([_flight.exclusive])
@@ -1404,7 +1537,7 @@ class UltracipherApp {
         }
         // Erst wenn die alte Datei weg ist: sonst bleibt der alte Name ganz
         // lesbar und der Wechsel von dort wiederholbar.
-        await storage!.remove(localPrefsKey(oldName));
+        await _removeLocal(oldName);
       } catch (e) {
         print('Passphrase changed, but the old copy was not removed '
             '(${e.runtimeType})');
@@ -1428,7 +1561,7 @@ class UltracipherApp {
   /// überschrieben).
   UltracipherDatabase? _localTargetOf(
       String newName, Uint8List newKey, bool mergeLocal) {
-    if (!storage!.containsKey(localPrefsKey(newName))) return null;
+    if (!_hasLocal(newName)) return null;
     if (!mergeLocal) throw LocalDatabaseExistsException();
     return _readNamedLocal(newName, newKey);
   }
@@ -1508,36 +1641,87 @@ class UltracipherApp {
         'being removed');
   }
 
+  /// Ob [_readNamedLocal] beim letzten Aufruf auf die `.bak` zurückgefallen
+  /// ist. Der Aufrufer liest es sofort danach (kein await dazwischen).
+  bool _lastReadRestored = false;
+
   /// Die entschlüsselte lokale Kopie unter [name] oder `null`, wenn es keine
   /// gibt. Eine unlesbare Kopie ist ein Fehler, nie "keine": sie darf nicht
   /// überschrieben werden.
+  ///
+  /// Nur hier entscheidet der MAC, ob die Hauptkopie taugt (der Store ersetzt
+  /// nie still). Fehlt sie (Absturz zwischen den beiden renames), ist sie zu
+  /// kurz, hat keine Magic oder einen falschen MAC, wird die `.bak` versucht.
+  /// Nicht bei einer neueren Version/Suite/Profil (die Hauptkopie ist dann
+  /// vermutlich von einer neueren App, ein Rückfall mit späterem Speichern
+  /// überschriebe sie) und nicht bei Fehlern nach gültigem MAC (echte Bytes,
+  /// ein Fehler im Code). Gelingt die `.bak`, wird sie SOFORT und ohne
+  /// Abwarten als Hauptkopie wiederhergestellt: hier und nicht in
+  /// [_startSession], denn [importEncryptedText] reiht sein Schreiben vor dem
+  /// Sitzungsstart ein, und dessen Rotation machte die kaputte Hauptkopie zur
+  /// `.bak`, bevor die Wiederherstellung liefe.
   UltracipherDatabase? _readNamedLocal(String name, Uint8List key) {
-    var text = storage!.getString(localPrefsKey(name));
-    if (text == null) return null;
+    _lastReadRestored = false;
+    Uint8List? main;
     try {
-      return decryptDatabase(decodeBase64Bounded(text), key);
-    } on UltracipherFormatException catch (e) {
-      print('Local copy has an unsupported format (${e.kind})');
-      throw LocalDatabaseUnreadableException(_formatErrorMessage(e));
+      main = _localBytes(name);
     } catch (e) {
-      print('Failed to decrypt/parse the local copy (${e.runtimeType})');
+      print('Failed to decode the local copy (${e.runtimeType})');
       throw LocalDatabaseUnreadableException('${e.runtimeType}');
     }
+    var bak = localStore!.readBackup(name);
+    if (main == null && bak == null) return null;
+    String? detail;
+    if (main != null) {
+      try {
+        return decryptDatabase(main, key);
+      } on UltracipherFormatException catch (e) {
+        print('Local copy has an unsupported format (${e.kind})');
+        detail = _formatErrorMessage(e);
+        if (e.kind != FormatErrorKind.badMagic) {
+          throw LocalDatabaseUnreadableException(detail);
+        }
+      } on UltracipherAuthenticationException catch (e) {
+        print('Failed to decrypt/parse the local copy (${e.runtimeType})');
+        detail = '${e.runtimeType}';
+      } catch (e) {
+        print('Failed to decrypt/parse the local copy (${e.runtimeType})');
+        throw LocalDatabaseUnreadableException('${e.runtimeType}');
+      }
+    }
+    // Hier: Hauptkopie fehlt oder ist beschädigt.
+    if (bak != null) {
+      try {
+        var database = decryptDatabase(bak, key);
+        localStore!.restoreBackup(name).then((_) {}, onError: (Object e) {
+          print('Restoring the backup copy failed (${e.runtimeType})');
+        });
+        _lastReadRestored = true;
+        return database;
+      } on UltracipherFormatException catch (e) {
+        print('The backup copy has an unsupported format (${e.kind})');
+        detail ??= _formatErrorMessage(e);
+      } catch (e) {
+        print('Failed to decrypt/parse the backup copy (${e.runtimeType})');
+        detail ??= '${e.runtimeType}';
+      }
+    }
+    throw LocalDatabaseUnreadableException(detail ?? 'missing');
   }
 
   Future<void> _writeNamedLocal(
       String name, UltracipherDatabase database, Uint8List key) {
-    return storage!.setString(
-        localPrefsKey(name), base64.encode(encryptDatabase(database, key)));
+    return localStore!.write(name, encryptDatabase(database, key));
   }
 
   /// Beginnt die Sitzung für [database]. Das Backend kommt aus
   /// deren `settings.github` (siehe [_buildBackendFromSettings]); ohne eines
   /// ist der Status `noRemote`, sonst `notSynced` (noch kein Sync
   /// abgeschlossen) und der erste Sync läuft an.
-  void _startSession(
-      String name, Uint8List key, UltracipherDatabase database) {
+  void _startSession(String name, Uint8List key, UltracipherDatabase database,
+      {bool restored = false}) {
     _newSession(SyncStatus.noRemote);
+    _restoredFromBackup = restored;
     _databaseName = name;
     var github = database.settings?.github;
     var backend = github == null ? null : _buildBackendFromSettings(github, key);

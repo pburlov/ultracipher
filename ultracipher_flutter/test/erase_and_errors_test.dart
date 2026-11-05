@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
 import 'package:ultracipher_flutter/src/commons.dart';
 import 'package:ultracipher_flutter/src/core.dart';
+import 'package:ultracipher_flutter/src/local_store/local_store.dart';
+import 'package:ultracipher_flutter/src/model/model.dart';
 
 import 'memoized_key_derivation.dart';
 import 'write_limit.dart';
@@ -38,7 +40,9 @@ void main() {
       await app.createDatabase('some passphrase');
       var keys = app.storage!.getKeys();
       expect(keys.where(UltracipherApp.isKeyCachePrefsKey), isEmpty);
-      expect(keys.where((k) => k.startsWith('ucdb_')), hasLength(1));
+      // The copy is in the local store, no longer in the prefs.
+      expect(keys.where((k) => k.startsWith('ucdb_')), isEmpty);
+      expect(app.localStore!.names, hasLength(1));
       for (var legacy in _legacy.keys) {
         expect(UltracipherApp.isKeyCachePrefsKey(legacy), isFalse,
             reason: legacy);
@@ -48,12 +52,18 @@ void main() {
 
   group('eraseLocalData', () {
     late UltracipherApp app;
+    late String name;
 
     setUp(() async {
       SharedPreferences.setMockInitialValues({..._legacy, _oldKeyCache: 'x'});
       app = UltracipherApp();
       await app.init();
       await app.createDatabase('some passphrase');
+      // A second save, so that a .bak copy exists as well.
+      app.loadedDatabase.value!.addEntry().addNewVersion(Entry(label: 'x'));
+      await app.saveDatabase();
+      name = app.localDatabaseNames().single;
+      expect(app.localStore!.readBackup(name), isNotNull);
     });
 
     test('first step removes ucdb_ and key caches, keeps old-model entries',
@@ -68,6 +78,10 @@ void main() {
 
       expect(app.loadedDatabase.value, isNull, reason: 'session ended');
       expect(app.localDatabaseNames(), isEmpty);
+      // The store is empty, the .bak copy included.
+      expect(app.localStore!.names, isEmpty);
+      expect(app.localStore!.read(name), isNull);
+      expect(app.localStore!.readBackup(name), isNull);
       expect(app.storage!.getKeys().toSet(), _legacy.keys.toSet());
       expect(app.storage!.getString('github_credentials_work_key'), 'blob');
       expect(app.hasLegacyLocalData, isTrue);
@@ -79,6 +93,33 @@ void main() {
 
       expect(app.storage!.getKeys(), isEmpty);
       expect(app.hasLegacyLocalData, isFalse);
+      expect(app.localStore!.names, isEmpty);
+    });
+
+    test('includeLegacy alone empties the store, .bak included, and the '
+        'preferences', () async {
+      await app.eraseLocalData(includeLegacy: true);
+
+      expect(app.localStore!.names, isEmpty);
+      expect(app.localStore!.readBackup(name), isNull);
+      expect(app.storage!.getKeys(), isEmpty);
+    });
+
+    test('first step also removes a v1 copy left in the preferences (failed '
+        'migration), but not an old-format one', () async {
+      // Format v1 text under ucdb_: what a failed migration leaves behind.
+      var v1 = base64.encode([0x55, 0x43, 0x44, 0x42, 0, 1, 0, 1, 7, 7]);
+      await app.storage!.setString(UltracipherApp.localPrefsKey('left'), v1);
+      await app.storage!.setString(UltracipherApp.localPrefsKey('old'),
+          base64.encode([0, 1, 2, 3, 4, 5, 6, 7, 8]));
+
+      await app.eraseLocalData();
+
+      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey('left')),
+          isFalse);
+      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey('old')),
+          isTrue);
+      expect(app.localDatabaseNames(), isEmpty);
     });
 
     test('without old-model entries there is no legacy data', () async {
@@ -100,6 +141,8 @@ void main() {
       expect(describeError(GithubFileMissingException()),
           GithubFileMissingException().toString());
       expect(describeError(DatabaseTooLargeException()), tooLargeMessage);
+      expect(describeError(const LocalStoreException(LocalStoreErrorKind.full)),
+          'Not enough storage on this device; the change was not saved');
     });
 
     test('unknown errors give only the type name', () {

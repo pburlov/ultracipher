@@ -20,6 +20,7 @@ import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
 import 'package:ultracipher_flutter/src/user_key_hash.dart';
 
+import 'fake_local_store.dart';
 import 'fake_remote_backend.dart';
 import 'memoized_key_derivation.dart';
 
@@ -62,6 +63,19 @@ class _KN {
   _KN(this.key, this.name);
 }
 
+/// A device (app, disk) with a good .bak and a damaged main copy.
+class _Broken {
+  final UltracipherApp app;
+  final FakeLocalDisk disk;
+  final _KN kn;
+
+  /// The .bak content (label "kept") and the damaged main copy (or null).
+  final Uint8List good;
+  final Uint8List? broken;
+
+  _Broken(this.app, this.disk, this.kn, this.good, this.broken);
+}
+
 /// Puts a local database for [pass] straight into the prefs (as an earlier
 /// session would have).
 Future<String> _seedLocal(
@@ -69,21 +83,18 @@ Future<String> _seedLocal(
   var knkeyname = await _keyAndName(app, pass);
   var key = knkeyname.key;
   var name = knkeyname.name;
-  await app.storage!.setString(UltracipherApp.localPrefsKey(name),
-      base64.encode(UltracipherApp.encryptDatabase(db, key)));
+  await seedLocal(app, name, UltracipherApp.encryptDatabase(db, key));
   return name;
 }
 
 UltracipherDatabase _storedDb(UltracipherApp app, String name, Uint8List key) =>
-    UltracipherApp.decryptDatabase(
-        base64.decode(app.storage!.getString(UltracipherApp.localPrefsKey(name))!),
-        key);
+    UltracipherApp.decryptDatabase(localBytes(app, name), key);
 
 String _exportText(UltracipherDatabase db, Uint8List key) =>
     base64.encode(UltracipherApp.encryptDatabase(db, key));
 
-Map<String, Object?> _prefs(UltracipherApp app) =>
-    {for (var k in app.storage!.getKeys()) k: app.storage!.get(k)};
+/// Everything held locally: prefs and the copies in the store.
+Map<String, Object?> _prefs(UltracipherApp app) => localSnapshot(app);
 
 Set<String> _keyCacheEntries(UltracipherApp app) =>
     app.storage!.getKeys().where((k) => k.endsWith('_key')).toSet();
@@ -207,7 +218,7 @@ void main() {
 
       await app.openLocalDatabase(_passA);
       expect(_labels(app.loadedDatabase.value!), equals(['a1']));
-      var aBefore = app.storage!.getString(UltracipherApp.localPrefsKey(nameA));
+      var aBefore = localBytes(app, nameA);
 
       await app.openLocalDatabase(_passB);
       expect(_labels(app.loadedDatabase.value!), equals(['b1']));
@@ -217,7 +228,7 @@ void main() {
       var knkeyB = await _keyAndName(app, _passB);
       var keyB = knkeyB.key;
       expect(_labels(_storedDb(app, nameB, keyB)), equals(['b1', 'b2']));
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(nameA)),
+      expect(localBytes(app, nameA),
           equals(aBefore));
       expect(_keyCacheEntries(app), isEmpty);
     });
@@ -248,8 +259,7 @@ void main() {
       var app = await _freshApp();
       var knname = await _keyAndName(app, _passA);
       var name = knname.name;
-      await app.storage!
-          .setString(UltracipherApp.localPrefsKey(name), 'AAAAAAAAAAAAAAAAAAAA');
+      await seedLocal(app, name, junkBytes('AAAAAAAAAAAAAAAAAAAA'));
       var before = _prefs(app);
 
       var error = await _error(app.openLocalDatabase(_passA));
@@ -301,10 +311,10 @@ void main() {
       var app = await _freshApp();
       var knname = await _keyAndName(app, _passA);
       var name = knname.name;
-      await app.storage!.setString(UltracipherApp.localPrefsKey(name), 'junk');
+      await seedLocal(app, name, junkBytes('junk'));
       expect(await _error(app.createDatabase(_passA)),
           isA<LocalDatabaseExistsException>());
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(name)), 'junk');
+      expect(localBytes(app, name), junkBytes('junk'));
     });
   });
 
@@ -393,13 +403,13 @@ void main() {
       var knkeyname = await _keyAndName(app, _passA);
       var key = knkeyname.key;
       var name = knkeyname.name;
-      await app.storage!.setString(UltracipherApp.localPrefsKey(name), 'junk');
+      await seedLocal(app, name, junkBytes('junk'));
 
       var error = await _error(
           app.importEncryptedText(_exportText(_dbWith(['x']), key), _passA));
 
       expect(error, isA<LocalDatabaseUnreadableException>());
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(name)), 'junk');
+      expect(localBytes(app, name), junkBytes('junk'));
       expect(app.loadedDatabase.value, isNull);
     });
 
@@ -526,14 +536,14 @@ void main() {
       await app.storage!.setString(_legacyKeyEntry(_passA), 'old');
       await app.openLocalDatabase(_passB);
       await app.openLocalDatabase(_passA);
-      var bBefore = app.storage!.getString(UltracipherApp.localPrefsKey(nameB));
+      var bBefore = localBytes(app, nameB);
 
       expect(await app.removeLocalDatabase(), isTrue);
 
-      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey(nameA)),
+      expect(app.localStore!.contains(nameA),
           isFalse);
       expect(_keyCacheEntries(app), equals({_legacyKeyEntry(_passA)}));
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(nameB)),
+      expect(localBytes(app, nameB),
           equals(bBefore));
       expect(app.loadedDatabase.value, isNull);
       expect(app.syncStatus.value.state, SyncState.noRemote);
@@ -571,13 +581,12 @@ void main() {
       var knkeyname = await _keyAndName(app, _passA);
       var key = knkeyname.key;
       var name = knkeyname.name;
-      await app.storage!
-          .setString(UltracipherApp.localPrefsKey(name), 'AAAAAAAAAAAAAAAAAAAA');
+      await seedLocal(app, name, junkBytes('AAAAAAAAAAAAAAAAAAAA'));
       expect(await _error(app.openLocalDatabase(_passA)),
           isA<LocalDatabaseUnreadableException>());
 
       expect(await app.removeLocalDatabase(passphrase: _passA), isTrue);
-      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey(name)),
+      expect(app.localStore!.contains(name),
           isFalse);
 
       // Starting over works: the same passphrase creates a fresh database.
@@ -595,7 +604,7 @@ void main() {
 
       expect(await app.removeLocalDatabase(passphrase: _passA), isTrue);
 
-      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey(name)),
+      expect(app.localStore!.contains(name),
           isFalse);
       expect(app.storage!.getString(cacheKey), 'AAAA');
     });
@@ -613,7 +622,7 @@ void main() {
 
       expect(await app.removeLocalDatabase(passphrase: _passB), isTrue);
       expect(app.loadedDatabase.value, isNull);
-      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey(nameB)),
+      expect(app.localStore!.contains(nameB),
           isFalse);
     });
 
@@ -644,7 +653,7 @@ void main() {
       gate.complete();
       await Future<void>.delayed(const Duration(milliseconds: 100));
 
-      expect(app.storage!.containsKey(UltracipherApp.localPrefsKey(name)),
+      expect(app.localStore!.contains(name),
           isFalse);
       expect(remote.writeCount, 0);
       expect(app.loadedDatabase.value, isNull);
@@ -745,7 +754,7 @@ void main() {
       remote.readGate = gate;
       await app.openLocalDatabase(_passA);
       await _until(() => remote.readCount > 0);
-      var aBefore = app.storage!.getString(UltracipherApp.localPrefsKey(nameA));
+      var aBefore = localBytes(app, nameA);
 
       await app.openLocalDatabase(_passB);
       var opened = app.loadedDatabase.value;
@@ -755,7 +764,7 @@ void main() {
       expect(app.loadedDatabase.value, same(opened));
       expect(_labels(opened!), equals(['b']));
       expect(app.syncStatus.value.state, SyncState.noRemote);
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(nameA)),
+      expect(localBytes(app, nameA),
           equals(aBefore));
       expect(remote.writeCount, 0);
     });
@@ -773,7 +782,7 @@ void main() {
       remote.readGate = gate;
       await app.openLocalDatabase(_passA);
       await _until(() => remote.readCount > 0);
-      var aBefore = app.storage!.getString(UltracipherApp.localPrefsKey(nameA));
+      var aBefore = localBytes(app, nameA);
 
       app.closeDatabase();
       gate.complete();
@@ -781,7 +790,7 @@ void main() {
 
       expect(app.loadedDatabase.value, isNull);
       expect(app.syncStatus.value.state, SyncState.noRemote);
-      expect(app.storage!.getString(UltracipherApp.localPrefsKey(nameA)),
+      expect(localBytes(app, nameA),
           equals(aBefore));
       expect(remote.writeCount, 0);
     });
@@ -823,6 +832,200 @@ void main() {
       expect(_keyCacheEntries(app), equals({legacy}));
       expect(app.storage!.getString(legacy), 'AAAA');
       expect(_labels(app.loadedDatabase.value!), equals(['one', 'x']));
+    });
+  });
+
+  group('fall back to the .bak copy', () {
+    // A device whose store holds a good previous save (.bak, label "kept")
+    // and a main copy made by [breakMain] from the newer state (label "lost");
+    // `null` means no main copy. The app has been init()ed over that disk.
+    Future<_Broken> device(Uint8List? Function(Uint8List newer) breakMain,
+        {bool withBackup = true}) async {
+      var disk = FakeLocalDisk();
+      SharedPreferences.setMockInitialValues({});
+      useLocalDisk(disk);
+      var app = UltracipherApp();
+      var kn = await _keyAndName(app, _passA);
+      var good = UltracipherApp.encryptDatabase(_dbWith(['kept']), kn.key);
+      var newer =
+          UltracipherApp.encryptDatabase(_dbWith(['kept', 'lost']), kn.key);
+      if (withBackup) disk.bak[kn.name] = good;
+      var broken = breakMain(newer);
+      if (broken != null) disk.main[kn.name] = broken;
+      await app.init();
+      return _Broken(app, disk, kn, good, broken);
+    }
+
+    // Header intact, a tag byte flipped: the MAC fails.
+    Uint8List tampered(Uint8List b) =>
+        Uint8List.fromList(b)..[b.length - 1] ^= 1;
+    Uint8List truncated(Uint8List b) => Uint8List.fromList(b.sublist(0, 10));
+    Uint8List noMagic(Uint8List b) => junkBytes('0123456789');
+    Uint8List? missing(Uint8List b) => null;
+    // Version field (bytes 4-5) of a newer app.
+    Uint8List newerVersion(Uint8List b) => Uint8List.fromList(b)..[5] = 9;
+
+    for (var broken in <String, Uint8List? Function(Uint8List)>{
+      'a main copy with a wrong MAC': tampered,
+      'a truncated main copy': truncated,
+      'a main copy without the magic': noMagic,
+      'no main copy (a crash between the two renames)': missing,
+    }.entries) {
+      test(
+          '${broken.key}: the .bak opens, is restored at once (without '
+          'rotating the good .bak) and is reported', () async {
+        var d = await device(broken.value);
+
+        await d.app.openLocalDatabase(_passA);
+
+        expect(_labels(d.app.loadedDatabase.value!), ['kept']);
+        expect(d.app.restoredFromBackup, isTrue);
+        await d.app.localStore!.readPersisted(d.kn.name);
+        expect(d.disk.main[d.kn.name], d.good);
+        expect(d.disk.bak[d.kn.name], d.good);
+        // Saving afterwards keeps going: the .bak is the restored state.
+        d.app.loadedDatabase.value!.addEntry().addNewVersion(Entry(label: 'n'));
+        await d.app.saveDatabase();
+        expect(_labels(_storedDb(d.app, d.kn.name, d.kn.key)), ['kept', 'n']);
+      });
+    }
+
+    test(
+        'an intact main copy is opened as is, nothing is reported or '
+        'restored', () async {
+      var d = await device((newer) => newer);
+
+      await d.app.openLocalDatabase(_passA);
+
+      expect(_labels(d.app.loadedDatabase.value!), ['kept', 'lost']);
+      expect(d.app.restoredFromBackup, isFalse);
+      expect(d.disk.bak[d.kn.name], d.good);
+    });
+
+    test('the report belongs to the session: closing resets it', () async {
+      var d = await device(tampered);
+      await d.app.openLocalDatabase(_passA);
+      expect(d.app.restoredFromBackup, isTrue);
+
+      d.app.closeDatabase();
+
+      expect(d.app.restoredFromBackup, isFalse);
+    });
+
+    test('a main copy of a newer version is not replaced by the older .bak',
+        () async {
+      var d = await device(newerVersion);
+
+      var error = await _error(d.app.openLocalDatabase(_passA));
+
+      expect(error, isA<LocalDatabaseUnreadableException>());
+      expect(error.toString(), contains('newer version'));
+      expect(d.app.loadedDatabase.value, isNull);
+      expect(d.app.restoredFromBackup, isFalse);
+      await d.app.localStore!.readPersisted(d.kn.name);
+      expect(d.disk.main[d.kn.name], d.broken, reason: 'untouched');
+      expect(d.disk.bak[d.kn.name], d.good);
+    });
+
+    test(
+        'a broken main copy without a .bak stays the content-free '
+        '"cannot be read" error and is left untouched', () async {
+      var d = await device(tampered, withBackup: false);
+
+      var error = await _error(d.app.openLocalDatabase(_passA));
+
+      expect(error, isA<LocalDatabaseUnreadableException>());
+      expect(error.toString(), contains('cannot be read'));
+      expect(d.app.loadedDatabase.value, isNull);
+      expect(d.disk.main[d.kn.name], d.broken);
+      expect(d.disk.bak, isEmpty);
+    });
+
+    test('both copies broken: unreadable, nothing written', () async {
+      var d = await device(tampered);
+      d.disk.bak[d.kn.name] = tampered(d.good);
+      await d.app.init();
+      var before = localSnapshot(d.app);
+
+      var error = await _error(d.app.openLocalDatabase(_passA));
+
+      expect(error, isA<LocalDatabaseUnreadableException>());
+      expect(d.app.restoredFromBackup, isFalse);
+      await d.app.localStore!.readPersisted(d.kn.name);
+      expect(localSnapshot(d.app), before);
+    });
+
+    test(
+        'an import onto a broken main copy restores first: the main copy '
+        'holds the merge and the .bak the good old state, not the broken '
+        'bytes', () async {
+      var d = await device(tampered);
+      var text = _exportText(_dbWith(['imported']), d.kn.key);
+
+      await d.app.importEncryptedText(text, _passA);
+
+      expect(_labels(d.app.loadedDatabase.value!), ['imported', 'kept']);
+      expect(d.app.restoredFromBackup, isTrue);
+      await d.app.localStore!.readPersisted(d.kn.name);
+      expect(
+          _labels(UltracipherApp.decryptDatabase(
+              d.disk.main[d.kn.name]!, d.kn.key)),
+          ['imported', 'kept']);
+      expect(d.disk.bak[d.kn.name], d.good);
+    });
+
+    test(
+        'a passphrase-change merge into a broken local copy restores it as '
+        'well', () async {
+      var d = await device(tampered);
+      var other = await _keyAndName(d.app, _passB);
+      await _seedLocal(d.app, _passB, _dbWith(['b']));
+      await d.app.openLocalDatabase(_passB);
+
+      await d.app.changeDatabasePassphrase(
+          oldPassphrase: _passB, newPassphrase: _passA, mergeLocal: true);
+
+      expect(_labels(d.app.loadedDatabase.value!), ['b', 'kept']);
+      expect(d.disk.bak[d.kn.name], d.good);
+      expect(d.app.localStore!.contains(other.name), isFalse);
+    });
+  });
+
+  group('the cache is current at once', () {
+    test(
+        'closing and reopening the same database while its last save is '
+        'still being persisted yields the saved state', () async {
+      var app = await _freshApp();
+      await app.createDatabase(_passA);
+      var store = app.localStore as FakeLocalStore;
+      store.persistGate = Completer<void>();
+
+      app.loadedDatabase.value!.addEntry().addNewVersion(Entry(label: 'late'));
+      var saving = app.saveDatabase();
+      app.closeDatabase();
+      await app.openLocalDatabase(_passA);
+
+      expect(_labels(app.loadedDatabase.value!), ['late']);
+      store.persistGate!.complete();
+      await saving;
+    });
+  });
+
+  group('removing', () {
+    test('removeLocalDatabase leaves neither a main nor a .bak copy', () async {
+      var app = await _freshApp();
+      await app.createDatabase(_passA);
+      var name = app.localDatabaseNames().single;
+      app.loadedDatabase.value!.addEntry().addNewVersion(Entry(label: 'x'));
+      await app.saveDatabase();
+      expect(app.localStore!.readBackup(name), isNotNull);
+
+      expect(await app.removeLocalDatabase(), isTrue);
+
+      expect(app.localStore!.read(name), isNull);
+      expect(app.localStore!.readBackup(name), isNull);
+      expect(app.localStore!.contains(name), isFalse);
+      expect(app.localDatabaseNames(), isEmpty);
     });
   });
 }
