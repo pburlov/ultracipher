@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Backup bewusst an: Bei Datenbanken ohne GitHub ist die Gerätekopie die einzige, ein Gerätewechsel ohne Backup verlöre sie. Der Inhalt ist v1-verschlüsselt (Argon2id + scrypt), Google sieht nur Ciphertext. -->
     <application
+        android:allowBackup="true"
         android:label="ultracipher_flutter"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">

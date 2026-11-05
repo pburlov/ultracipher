@@ -20,6 +20,33 @@ repository has no tags.
   their entries) and the launcher activity has `android:taskAffinity=""`
   (protection against task hijacking).
 
+### Local storage
+
+- The encrypted local copies no longer live in SharedPreferences / browser
+  `localStorage`. Native builds keep one file per database as
+  `databases/<name>` plus `databases/<name>.bak` in the Application Support
+  directory (raw v1 bytes instead of base64); the web build uses IndexedDB
+  (`ultracipher`, store `files`). Writes are atomic (temp file, flush, rename;
+  one transaction on the web); the previous save is kept as `.bak`. Dart offers
+  no directory fsync and Apple's flush is not `F_FULLFSYNC`, so a power loss
+  usually leaves the previous save; right after two quick saves it can damage
+  both copies, see `docs/security.md`.
+- Migration on the first start: existing copies are moved from the preferences
+  and the old entry is removed only after the new copy was read back byte for
+  byte. If that fails the old entry stays and is still read; the next start
+  tries again.
+- If the main copy is missing or damaged, the database opens from the `.bak`,
+  restores it and shows "Restored the previous save; the last change on this
+  device may be missing".
+- If the device storage is not available at startup (for example IndexedDB in
+  some private browser windows), the app shows an error page instead of
+  starting with a blank screen.
+- Android: `android:allowBackup="true"` is now set explicitly (it was the
+  default). Databases stay in Android Auto Backup and device transfer, because
+  for a database without GitHub the device copy is the only one; the content
+  stays v1-encrypted. The `.bak` doubles the size on disk, which counts
+  against Auto Backup's quota of about 25 MB.
+
 ### Sync log
 
 - New "Sync log" screen (button in the GitHub settings, also reachable without
