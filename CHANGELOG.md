@@ -187,6 +187,12 @@ Export a CSV with the old app version first.
 
 ### Fixed
 
+- Entry label, tags and content are stored exactly as entered. Leading and
+  trailing whitespace is no longer trimmed away, and an entry holding only
+  whitespace is no longer treated as empty and deleted by the cleanup. (CSV
+  import consequently keeps whitespace-only rows as entries.)
+- `Entry.toString` and `VersionedEntry.toString` no longer print label and
+  tags; they show only the id, the version count and the time.
 - Entries whose JSON has no `versions` key no longer crash the load; a
   wrong-typed value now fails loudly instead of silently emptying the list.
 - CSV: trailing `\r` on CRLF input, BOM stripping, export/import round trip on

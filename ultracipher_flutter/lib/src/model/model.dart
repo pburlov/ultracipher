@@ -136,7 +136,8 @@ class UltracipherDatabase {
   ///   neuesten Version eines vorhandenen Eintrags gleicht (ein zweiter
   ///   Import derselben Datei erzeugt keine Duplikate), sonst neuer Eintrag
   ///   mit frischer id. Verglichen wird nur mit dem Stand vor dem Import.
-  /// - Zeilen ohne Inhalt (name, tags, body leer) legen nie einen Eintrag an
+  /// - Zeilen ohne Inhalt (name, tags, body leer = Laenge 0, Leerzeichen
+  ///   zaehlen als Inhalt) legen nie einen Eintrag an
   ///   und zaehlen nicht.
   /// - Eine unbekannte id, die eine kanonische Ganzzahl ist, wird als int
   ///   angelegt (siehe [_typedId]).
@@ -827,7 +828,9 @@ class VersionedEntry {
 
   @override
   String toString() {
-    return 'VersionedEntry{latestEntry: $latestEntry';
+    // Ohne Inhalt: toString landet leicht in Logs und Fehlermeldungen.
+    return 'VersionedEntry{id: $id, versions: ${_versions.length}, '
+        'latestEntry: $latestEntry}';
   }
 
   @override
@@ -917,7 +920,8 @@ class Entry {
 
   @override
   String toString() {
-    return 'Entry{label: $label, tags: $tags, parsedTime: $_parsedTime}';
+    // Ohne label, tags und content (Klartext), siehe VersionedEntry.toString.
+    return 'Entry{createTime: $_createTime}';
   }
 
   String get label => _label.plainValue;
@@ -954,12 +958,19 @@ class Entry {
   }
 }
 
+/// Haelt einen Text nicht als String im Speicher, sondern als XOR mit einem
+/// Zufallsschluessel gleicher Laenge.
+///
+/// Das ist keine Verschluesselung: der Schluessel liegt direkt daneben und
+/// `Random` ist nicht kryptografisch. Es verhindert nur, dass ein einfacher
+/// Suchlauf ueber den Heap (Speicherabzug) den Klartext als zusammenhaengende
+/// Zeichenfolge findet. Der Text wird exakt gespeichert (kein trim).
 class ObfuscatedString {
   late Uint32List _encryptedValue;
   late Uint32List _key;
 
   ObfuscatedString(String str) {
-    var src = str.trim().codeUnits;
+    var src = str.codeUnits;
     _encryptedValue = Uint32List(src.length);
     if(_encryptedValue.isEmpty) return;
     _key = Uint32List(src.length);

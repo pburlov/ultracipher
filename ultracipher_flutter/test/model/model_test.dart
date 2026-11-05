@@ -426,6 +426,55 @@ void main() {
       expect(es.contains('st'), true);
       expect(es.contains('ST'), false);
     });
+
+    test('stores the text exactly: spaces, newlines, Unicode', () {
+      for (var s in [
+        '  secret  ',
+        '\n\tzeile\r\n',
+        ' ',
+        '   ',
+        'äöü € 😀 ',
+        ' 😀',
+      ]) {
+        var es = ObfuscatedString(s);
+        expect(es.plainValue, s);
+        expect(es.isEmpty, false);
+      }
+      expect(ObfuscatedString('').isEmpty, true);
+      expect(ObfuscatedString('').plainValue, '');
+    });
+
+    test('Entry keeps surrounding whitespace through JSON and cleanUp', () {
+      var d = UltracipherDatabase();
+      var e = Entry(label: ' l ', tags: '  ', content: '  secret \n');
+      expect(e.label, ' l ');
+      expect(e.tags, '  ');
+      expect(e.content, '  secret \n');
+      expect(Entry.fromJson(e.toJson()).content, '  secret \n');
+      var onlyBlank = Entry(content: '   ');
+      expect(onlyBlank.isEmpty, false);
+      d.addEntry().addNewVersion(onlyBlank);
+      d.addEntry().addNewVersion(Entry(label: '\n'));
+      d.cleanUp();
+      expect(d.getEntries().length, 2);
+      var copy = UltracipherDatabase.fromJson(
+          jsonDecode(jsonEncode(d.toJson())) as Map<String, dynamic>);
+      copy.cleanUp();
+      expect(copy.getEntries().length, 2);
+      expect(
+          copy.getEntries().map((v) => v.latestEntry!.content),
+          t.unorderedEquals(['   ', '']));
+    });
+
+    test('toString of Entry and VersionedEntry shows no secrets', () {
+      var e = Entry(label: 'GEHEIMLABEL', tags: 'GEHEIMTAG', content: 'GEHEIMBODY');
+      var v = VersionedEntry('id-1')..addNewVersion(e);
+      for (var s in [e.toString(), v.toString()]) {
+        expect(s, t.isNot(t.contains('GEHEIM')));
+      }
+      expect(v.toString(), t.contains('id-1'));
+      expect(v.toString().split('{').length, v.toString().split('}').length);
+    });
   });
   test('various', () {
     var codeUnits = "test".codeUnits;
