@@ -6,6 +6,20 @@ repository has no tags.
 
 ## [Unreleased]
 
+### Android build
+
+- The Android project is migrated to declarative Gradle plugins
+  (`settings.gradle.kts`, `build.gradle.kts`, `app/build.gradle.kts`),
+  Gradle 9.3.1 and AGP 9.1.0, so `flutter build apk` works again with the
+  current Flutter and JDK. The minimum Android version rises from 6 to 7
+  (minSdk 24). Application ID, version source, icons, permissions and the
+  (debug-key) release signing are unchanged; the launcher activity is now
+  declared `exported`. compileSdk and targetSdk rise from 31/30 to 36
+  (Android 16; the app now runs edge-to-edge). The manifest now declares a
+  `<queries>` entry for PROCESS_TEXT apps (the text selection menu shows
+  their entries) and the launcher activity has `android:taskAffinity=""`
+  (protection against task hijacking).
+
 ### Sync log
 
 - New "Sync log" screen (button in the GitHub settings, also reachable without
