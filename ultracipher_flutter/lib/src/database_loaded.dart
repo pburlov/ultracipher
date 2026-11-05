@@ -68,6 +68,25 @@ enum _MenuAction {
   removeLocal,
 }
 
+/// Fingerabdruck der angezeigten Liste, um nach einem Merge in Place zu
+/// erkennen, ob sie neu gebaut werden muss. Bewusst ohne Label: der Zustand
+/// würde sonst alle Labels als nicht überschreibbare Strings im RAM halten
+/// (siehe ObfuscatedString). Ein sichtbarer Wechsel des Labels heißt, dass der
+/// Kopf (neueste Version) eine andere createTime hat oder der Eintrag anders
+/// in der Liste steht (Identität). `versions.length` ist nur billige
+/// Redundanz.
+@visibleForTesting
+List<Object?> entriesSignature(
+        UltracipherDatabase database, List<VersionedEntry> entries) =>
+    [
+      database.lastChangedTime,
+      for (var e in entries) ...[
+        identityHashCode(e),
+        e.versions.length,
+        e.latestEntry?.createTime,
+      ],
+    ];
+
 class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     with WidgetsBindingObserver {
   final _searchFieldController = TextEditingController();
@@ -149,15 +168,8 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     }
   }
 
-  List<Object?> _signature(List<VersionedEntry> entries) => [
-        _database.lastChangedTime,
-        for (var e in entries) ...[
-          identityHashCode(e),
-          e.versions.length,
-          e.latestEntry?.createTime,
-          e.latestEntry?.label,
-        ],
-      ];
+  List<Object?> _signature(List<VersionedEntry> entries) =>
+      entriesSignature(_database, entries);
 
   void _updateEntries() {
     var entries = _database.getEntries(searchTerm: _searchFieldController.text);
