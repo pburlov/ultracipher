@@ -6,6 +6,7 @@ import 'backend/github_backend.dart';
 import 'backend/remote_backend.dart';
 import 'commons.dart';
 import 'progess_screen.dart';
+import 'sync_log_screen.dart';
 
 /// GitHub-Konfiguration der offenen Datenbank (Plan §3.4): Token, Repository
 /// und Branch, mit "Connect"/"Save", optional "Skip" und, wenn GitHub schon
@@ -151,6 +152,14 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(false),
                           child: Text(widget.setup ? 'Skip' : 'Cancel'),
+                        ),
+                        // Auch ohne Fehler erreichbar (Diagnose eines Syncs).
+                        TextButton(
+                          key: const Key('syncLogButton'),
+                          onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                  builder: (_) => const SyncLogScreen())),
+                          child: Text('Sync log'),
                         ),
                         if (_hasGithub)
                           TextButton(

@@ -17,6 +17,7 @@ import 'crypto/format_v1.dart';
 import 'crypto/kdf_profile.dart' as kdf;
 import 'db_codec.dart';
 import 'sync.dart';
+import 'sync_log.dart';
 import 'user_key_hash.dart';
 
 /// [UltracipherApp.openLocalDatabase] fand unter dem Namen dieser Passphrase
@@ -127,12 +128,25 @@ CsvImportResult importCsvInto(UltracipherDatabase db, String csv) {
 /// setzt [sawSynced] zurück, bevor es den Anfangszustand der Sitzung setzt.
 class _SyncStatusNotifier extends ValueNotifier<SyncStatus> {
   bool sawSynced = false;
+  final SyncLog _log;
 
-  _SyncStatusNotifier() : super(SyncStatus.noRemote);
+  _SyncStatusNotifier(this._log) : super(SyncStatus.noRemote);
 
   @override
   set value(SyncStatus status) {
     if (status.state == SyncState.synced) sawSynced = true;
+    // Alle Statuswechsel laufen hier durch: ein Eintrag im Sync-Log je
+    // Wechsel von Zustand oder Fehlertext. Nur `error` (nie `cause`).
+    var old = super.value;
+    if (old.state != status.state || old.error != status.error) {
+      // Kein `.name` (SDK-Constraint 2.12).
+      String name(SyncState state) => state.toString().split('.').last;
+      _log.record(
+          operation: 'status',
+          result: name(status.state),
+          detail: '${name(old.state)} -> ${name(status.state)}'
+              '${status.error == null ? '' : ': ${status.error}'}');
+    }
     super.value = status;
   }
 }
@@ -230,7 +244,11 @@ class UltracipherApp {
 
   /// Status der Synchronisation der geöffneten Sitzung, für die UI. Wird nur
   /// von der Sitzung beschrieben (siehe [_newSession] und [_syncOnce]).
-  final ValueNotifier<SyncStatus> syncStatus = _SyncStatusNotifier();
+  late final ValueNotifier<SyncStatus> syncStatus =
+      _SyncStatusNotifier(syncLog);
+
+  /// Sync-Log für die Fehlersuche (nur im Speicher, siehe [SyncLog]).
+  final SyncLog syncLog = SyncLog();
 
   /// Sitzungszähler. Jeder Wechsel der Sitzung (Öffnen, Schließen, Wechsel
   /// der Passphrase) erhöht ihn über [_newSession]. Ein
@@ -302,7 +320,8 @@ class UltracipherApp {
         owner: github.owner,
         repo: github.repo,
         token: github.token,
-        branch: github.branch);
+        branch: github.branch,
+        log: syncLog);
   }
 
   /// Beginnt eine neue Sitzung: erhöht den Zähler (laufende Syncs der alten
@@ -320,6 +339,10 @@ class UltracipherApp {
     // Ein im Netz haengender Lauf der alten Sitzung darf den ersten Lauf der
     // neuen nicht aufhalten (er verwirft sein Ergebnis ohnehin).
     _flight.reset(status);
+    // Eine Passphrase = eine Datenbank: das Log der alten Sitzung (auch
+    // Schließen und "Erase local data", beide laufen hierüber) bleibt nicht
+    // für die nächste stehen. Nach dem Status-Eintrag oben, damit es leer ist.
+    syncLog.clear();
   }
 
   /// Speichert die geöffnete Datenbank sofort lokal (verschlüsselt unter
@@ -989,7 +1012,8 @@ class UltracipherApp {
       }
     }
 
-    var owner = await GithubBackend.resolveOwner(newToken, client: httpClient);
+    var owner = await GithubBackend.resolveOwner(newToken,
+        client: httpClient, log: syncLog);
     requireAlive();
     var newGithub = GithubSettings(
         token: newToken, owner: owner, repo: newRepo, branch: newBranch);
@@ -1354,6 +1378,9 @@ class UltracipherApp {
       database.merge(candidate);
       _session++;
       _syncEpoch++;
+      // Auch hier beginnt eine neue Sitzung (_newSession läuft nicht): das Log
+      // leeren, die Einträge von _deleteOldRemote landen im frischen Log.
+      syncLog.clear();
       session = _session;
       _databaseName = newName;
       _root = newKey;

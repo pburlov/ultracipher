@@ -6,6 +6,27 @@ repository has no tags.
 
 ## [Unreleased]
 
+### Sync log
+
+- New "Sync log" screen (button in the GitHub settings, also reachable without
+  an error): the last 200 GitHub requests and sync status changes of the
+  current session, newest first, with "Copy" and "Clear". Each request shows
+  operation, HTTP method, endpoint category, status code, result (ok,
+  authRequired, rateLimit, remoteMissing, conflict, network, ...), GitHub's
+  error `message` and `documentation_url` (docs.github.com links only), a few
+  harmless response headers (request id, rate limit, token permissions and
+  scopes), owner/repo/branch and a masked file path (first 6 characters of the
+  database name). It contains account, repository and branch, so check it
+  before sharing. It is kept in memory only, never printed, and cleared
+  whenever a session starts or ends (including a passphrase change); answers
+  that arrive for an earlier session are dropped.
+- What the log guarantees to leave out: the token (exact, URL-encoded, any
+  piece of 8 or more characters, also across line breaks, and known token
+  patterns such as `ghp_...` and `github_pat_...`), the `Authorization`
+  header, request URLs and query strings, the body of successful responses, and the
+  full database name. Long base64-like runs in GitHub's error text are removed
+  on a best-effort basis.
+
 ### Changed
 
 - GitHub settings: the branch field starts empty for a new configuration, and

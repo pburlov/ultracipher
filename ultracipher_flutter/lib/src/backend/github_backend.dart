@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../db_codec.dart' show maxBase64Length;
+import '../sync_log.dart';
 import 'remote_backend.dart';
 
 /// GitHub-backed [RemoteBackend], using the repository Contents API.
@@ -91,6 +92,7 @@ class GithubBackend implements RemoteBackend {
     String? body,
     required Duration timeout,
     bool track = false,
+    _Trace? trace,
   }) {
     var abort = Completer<void>();
     var request = http.AbortableRequest(method, uri,
@@ -110,7 +112,21 @@ class GithubBackend implements RemoteBackend {
     if (track) {
       call.then<void>((_) => finish(), onError: (Object _) => finish());
     }
+    // Nur mithören (Sync-Log): das zurückgegebene Future und seine Fehler
+    // bleiben unverändert. Nach einem Timeout gibt es genau einen Eintrag
+    // (`timeout`): weder der Abbruch des Clients noch eine späte Antwort
+    // eines Clients, der den Abbruch ignoriert, erzeugt einen zweiten.
+    var timedOut = false;
+    if (trace != null) {
+      call.then<void>((response) {
+        if (!timedOut) trace.response(method, response);
+      }, onError: (Object e) {
+        if (!timedOut) trace.failure(method, e);
+      });
+    }
     return call.timeout(timeout, onTimeout: () {
+      timedOut = true;
+      trace?.timeout(method, timeout);
       if (!abort.isCompleted) abort.complete();
       finish();
       throw RemoteTimeoutException(timeout);
@@ -144,6 +160,9 @@ class GithubBackend implements RemoteBackend {
   final String branch;
   final http.Client _client;
 
+  /// Sync-Log (nur im Speicher); `null` loggt nichts. Siehe [_Trace].
+  final SyncLog? log;
+
   /// Maps a database name to its file path. Defaults to [pathForName]
   /// (production uses the default); a test seam.
   final String Function(String name) _pathMapper;
@@ -157,6 +176,7 @@ class GithubBackend implements RemoteBackend {
     http.Client? client,
     this.requestTimeout = defaultRequestTimeout,
     this.maxTextLength = maxBase64Length,
+    this.log,
   })  : _pathMapper = pathMapper ?? pathForName,
         _client = client ?? http.Client();
 
@@ -176,6 +196,21 @@ class GithubBackend implements RemoteBackend {
 
   /// The path [name] resolves to under this instance's [_pathMapper].
   String pathFor(String name) => _pathMapper(name);
+
+  /// Log-Kontext einer Anfrage zur Datenbank [name] (null ohne Log).
+  _Trace? _trace(String operation, String endpoint, String? name,
+      {int? epoch}) {
+    var log = this.log;
+    if (log == null) return null;
+    return _Trace(log, operation, endpoint,
+        owner: owner,
+        repo: repo,
+        branch: branch,
+        name: name,
+        pathSuffix: name == null ? null : _suffix(pathFor(name)),
+        token: token,
+        epoch: epoch);
+  }
 
   Uri _contentUri(String name) => Uri.parse(
       '$apiBase/repos/$owner/$repo/contents/${pathFor(name)}'
@@ -203,7 +238,8 @@ class GithubBackend implements RemoteBackend {
   /// file and overwrite the real one.
   @override
   Future<RemoteData> read(String name) async {
-    var response = await _get(_contentUri(name));
+    var trace = _trace('read file', 'contents', name);
+    var response = await _get(_contentUri(name), trace: trace);
     if (response.statusCode == 200) {
       String sha;
       String? envelope;
@@ -228,11 +264,12 @@ class GithubBackend implements RemoteBackend {
           throw const FormatException('Unexpected response');
         }
       } catch (e) {
+        trace?.parseError(response.statusCode);
         throw RemoteBackendException(
             'Failed to parse GitHub response (${e.runtimeType})',
             statusCode: response.statusCode);
       }
-      envelope ??= await _readBlob(sha);
+      envelope ??= await _readBlob(sha, name, trace?._epoch);
       try {
         var ciphertext = _decodeEnvelope(envelope);
         if (ciphertext.isEmpty && size != 0) {
@@ -240,6 +277,7 @@ class GithubBackend implements RemoteBackend {
         }
         return RemoteData(bytes: ciphertext, version: sha);
       } catch (e) {
+        trace?.parseError(response.statusCode);
         throw RemoteBackendException(
             'Failed to parse GitHub response (${e.runtimeType})',
             statusCode: response.statusCode);
@@ -252,10 +290,10 @@ class GithubBackend implements RemoteBackend {
   }
 
   /// GET with the shared transport-error mapping of [read].
-  Future<http.Response> _get(Uri uri) async {
+  Future<http.Response> _get(Uri uri, {_Trace? trace}) async {
     try {
       return await _send(_client, 'GET', uri,
-          headers: _headers, timeout: requestTimeout);
+          headers: _headers, timeout: requestTimeout, trace: trace);
     } on RemoteTimeoutException {
       rethrow;
     } catch (e) {
@@ -268,9 +306,14 @@ class GithubBackend implements RemoteBackend {
   /// envelope the Contents API would have delivered inline. Unlike the
   /// Contents request, a 404 is no "missing file" here: the sha was just
   /// returned, so the file exists and the answer is an error.
-  Future<String> _readBlob(String sha) async {
-    var response = await _get(Uri.parse(
-        '$apiBase/repos/$owner/$repo/git/blobs/${Uri.encodeComponent(sha)}'));
+  Future<String> _readBlob(String sha, String name, int? epoch) async {
+    // Die Epoche des Datei-Trace: ein Sitzungswechsel dazwischen verwirft
+    // auch den Blob-Eintrag.
+    var trace = _trace('read blob', 'git/blobs', name, epoch: epoch);
+    var response = await _get(
+        Uri.parse(
+            '$apiBase/repos/$owner/$repo/git/blobs/${Uri.encodeComponent(sha)}'),
+        trace: trace);
     if (response.statusCode == 200) {
       try {
         var json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -279,6 +322,7 @@ class GithubBackend implements RemoteBackend {
         }
         return json['content'] as String;
       } catch (e) {
+        trace?.parseError(response.statusCode);
         throw RemoteBackendException(
             'Failed to parse GitHub response (${e.runtimeType})',
             statusCode: response.statusCode);
@@ -351,13 +395,15 @@ class GithubBackend implements RemoteBackend {
       if (branch.isNotEmpty) 'branch': branch,
       if (version != null) 'sha': version,
     };
+    var trace = _trace('put', 'contents', name);
     http.Response response;
     try {
       response = await _send(_client, 'PUT', _writeUri(name),
           headers: {..._headers, 'Content-Type': 'application/json'},
           body: jsonEncode(body),
           timeout: requestTimeout,
-          track: true);
+          track: true,
+          trace: trace);
     } on RemoteTimeoutException {
       rethrow;
     } catch (e) {
@@ -370,6 +416,7 @@ class GithubBackend implements RemoteBackend {
         var content = json['content'] as Map<String, dynamic>?;
         return content?['sha'] as String?;
       } catch (e) {
+        trace?.parseError(response.statusCode);
         throw RemoteBackendException(
             'Failed to parse GitHub response (${e.runtimeType})',
             statusCode: response.statusCode);
@@ -418,7 +465,8 @@ class GithubBackend implements RemoteBackend {
           headers: {..._headers, 'Content-Type': 'application/json'},
           body: body,
           timeout: requestTimeout,
-          track: true);
+          track: true,
+          trace: _trace('delete', 'contents', name));
     } on RemoteTimeoutException {
       rethrow;
     } catch (e) {
@@ -449,7 +497,8 @@ class GithubBackend implements RemoteBackend {
   /// time so a normal sync never needs this request.
   static Future<String> resolveOwner(String token,
       {http.Client? client,
-      Duration requestTimeout = defaultRequestTimeout}) async {
+      Duration requestTimeout = defaultRequestTimeout,
+      SyncLog? log}) async {
     var httpClient = client ?? http.Client();
     var closeClient = client == null;
     try {
@@ -459,7 +508,10 @@ class GithubBackend implements RemoteBackend {
             'Authorization': 'Bearer $token',
             'X-GitHub-Api-Version': '2022-11-28',
           },
-          timeout: requestTimeout);
+          timeout: requestTimeout,
+          trace: log == null
+              ? null
+              : _Trace(log, 'resolve owner', 'user', token: token));
       _throwIfRateLimited(response);
       if (response.statusCode == 401 || response.statusCode == 403) {
         throw RemoteAuthException('GitHub rejected the token',
@@ -497,15 +549,20 @@ class GithubBackend implements RemoteBackend {
 /// Every other status passes through to the caller's auth/error mapping.
 /// Neither the body nor the token ends up in the message.
 void _throwIfRateLimited(http.Response response) {
-  var status = response.statusCode;
-  if (status != 429 && status != 403) return;
-  var retryAfter = _header(response, 'retry-after');
-  var marked = _header(response, 'x-ratelimit-remaining') == '0' ||
-      retryAfter != null ||
-      response.body.toLowerCase().contains('rate limit');
-  if (status == 403 && !marked) return;
+  if (!_isRateLimited(response)) return;
   throw RemoteRateLimitException('GitHub rate limit reached, try again later',
-      statusCode: status, retryAfter: _parseRetryAfter(retryAfter));
+      statusCode: response.statusCode,
+      retryAfter: _parseRetryAfter(_header(response, 'retry-after')));
+}
+
+/// Die Entscheidung von [_throwIfRateLimited], auch für das Sync-Log.
+bool _isRateLimited(http.Response response) {
+  var status = response.statusCode;
+  if (status != 429 && status != 403) return false;
+  if (status == 429) return true;
+  return _header(response, 'x-ratelimit-remaining') == '0' ||
+      _header(response, 'retry-after') != null ||
+      response.body.toLowerCase().contains('rate limit');
 }
 
 /// Case-insensitive header lookup: HTTP header names are case-insensitive,
@@ -523,4 +580,229 @@ String? _header(http.Response response, String name) {
 Duration? _parseRetryAfter(String? value) {
   var seconds = int.tryParse(value?.trim() ?? '');
   return seconds == null ? null : Duration(seconds: seconds);
+}
+
+/// ".txt" o. ä.: die Endung des Pfads, die im Log unmaskiert bleibt.
+String _suffix(String path) => path.endsWith('.txt') ? '.txt' : '';
+
+/// Schreibt eine Anfrage und ihre Antwort ins [SyncLog]. Jeder Aufruf fängt
+/// alle Fehler (das Log darf den Sync nie stören).
+///
+/// Was hineinkommt: Operation, Methode, Endpunkt-Kategorie, Status, Ergebnis,
+/// bei Fehlerantworten `message`/`documentation_url` des GitHub-Fehler-JSON,
+/// owner/repo/branch, der maskierte Pfad und eine feste Auswahl harmloser
+/// Header. NIE: URL, Query, Token, Header `Authorization`, Body einer
+/// erfolgreichen Antwort (enthält den Dateiinhalt), der volle Name, die
+/// Ausnahmetexte der Clients (`ClientException` nennt die URL).
+class _Trace {
+  static const _headerWhitelist = [
+    'x-github-request-id',
+    'x-ratelimit-remaining',
+    'x-accepted-github-permissions',
+    // Ein classic Token ohne repo-Scope bekommt bei einem privaten Repo ein
+    // nacktes 404: die Scopes (Namen, keine Geheimnisse) erklären das.
+    'x-oauth-scopes',
+    'x-accepted-oauth-scopes',
+    'github-authentication-token-expiration',
+    'retry-after',
+  ];
+
+  /// Muster bekannter GitHub-Token (classic und fine-grained).
+  static final RegExp _tokenPattern =
+      RegExp(r'(gh[pousr]|github_pat)_[A-Za-z0-9_]+');
+  static final RegExp _longRun = RegExp(r'[A-Za-z0-9+/=_-]{40,}');
+  static const int _fragmentLength = 8;
+
+  final SyncLog log;
+  final String operation;
+  final String endpoint;
+  final String? _owner;
+  final String? _repo;
+  final String? _branch;
+  final String? name;
+  final String? pathSuffix;
+  final String token;
+
+  /// Epoche des Logs beim Start der Anfrage (siehe [SyncLog.epoch]).
+  final int _epoch;
+
+  _Trace(this.log, this.operation, this.endpoint,
+      {String? owner,
+      String? repo,
+      String? branch,
+      this.name,
+      this.pathSuffix,
+      required this.token,
+      int? epoch})
+      : _epoch = epoch ?? log.epoch,
+        _owner = owner,
+        _repo = repo,
+        _branch = branch;
+
+  // Auch Konto, Repo und Branch laufen durch den Scrub: ein vertipptes
+  // Token im Repo-Feld darf nicht im Log landen.
+  String? get owner => _owner == null ? null : _scrub(_owner!, runs: false);
+  String? get repo => _repo == null ? null : _scrub(_repo!, runs: false);
+  String? get branch => _branch == null ? null : _scrub(_branch!, runs: false);
+
+  /// Die ersten Zeichen des Namens (höchstens 6, nie mehr als die Hälfte).
+  String? get _maskedPath {
+    var n = name;
+    if (n == null) return null;
+    var shown = n.length ~/ 2 < 6 ? n.length ~/ 2 : 6;
+    return '${n.substring(0, shown)}...<${pathSuffix ?? ''}';
+  }
+
+  /// Entfernt, was nie ins Log darf, auch wenn GitHub oder ein Tippfehler es
+  /// wiederholt. Garantiert: der exakte Token, seine URL-codierte Form, jedes
+  /// Teilstück ab 8 Zeichen (auch über Zeilenumbrüche verteilt), bekannte
+  /// Token-Muster (`ghp_...`, `github_pat_...`), der exakte Name (auch codiert).
+  /// Nur best effort (mit [runs]): lange base64-artige Folgen, die auch
+  /// Inhalt sein könnten. Whitespace wird vor dem Scrub zu einem Leerzeichen,
+  /// damit Umbrüche ein Geheimnis nicht zerschneiden.
+  String _scrub(String text, {bool runs = true}) {
+    var out = text.replaceAll(RegExp(r'\s+'), ' ');
+    var n = name?.trim();
+    var fragments = <String>[
+      for (var i = 0; i + _fragmentLength <= token.length; i++)
+        token.substring(i, i + _fragmentLength)
+    ];
+    var whole = <String>[
+      token,
+      Uri.encodeComponent(token),
+      if (n != null) n,
+      if (n != null) Uri.encodeComponent(n),
+    ];
+    for (var secret in whole) {
+      if (secret.isNotEmpty) out = out.replaceAll(secret, '[redacted]');
+    }
+    out = out.replaceAll(_tokenPattern, '[redacted]');
+    for (var fragment in fragments) {
+      out = out.replaceAll(fragment, '[redacted]');
+    }
+    // Ein Rest, der erst ohne Leerzeichen ein Teilstück ergibt (Umbruch
+    // mitten im Token): lieber alles weglassen.
+    var squashed = out.replaceAll(' ', '');
+    if (fragments.any(squashed.contains) ||
+        whole.any((w) => w.isNotEmpty && squashed.contains(w))) {
+      return '[redacted]';
+    }
+    return runs ? out.replaceAll(_longRun, '[redacted]') : out;
+  }
+
+  static String _resultFor(String operation, http.Response response) {
+    var status = response.statusCode;
+    if (status >= 200 && status < 300) return 'ok';
+    if (_isRateLimited(response)) return 'rateLimit';
+    if (status == 401 || status == 403) return 'authRequired';
+    if (status == 404) {
+      if (operation == 'read file') return 'remoteMissing';
+      if (operation == 'delete') return 'conflict';
+      return 'notFound';
+    }
+    if ((status == 409 || status == 422) &&
+        (operation == 'put' || operation == 'delete')) {
+      return 'conflict';
+    }
+    return 'httpError';
+  }
+
+  void response(String method, http.Response response) {
+    try {
+      String? message;
+      String? documentationUrl;
+      var status = response.statusCode;
+      // Nur Fehlerantworten: ein 2xx-Body enthält den Dateiinhalt.
+      if (status < 200 || status >= 300) {
+        try {
+          var json = jsonDecode(response.body);
+          if (json is Map) {
+            var m = json['message'];
+            var d = json['documentation_url'];
+            if (m is String) {
+              // Erst bereinigen, dann kürzen: sonst schneidet das Kürzen ein
+              // wiederholtes Geheimnis in einen nicht mehr erkennbaren Rest.
+              message = SyncLog.clip(_scrub(m));
+            }
+            // Nur Links auf die GitHub-Doku, ohne Query (dort könnte etwas
+            // stehen) und ohne die base64-Regel (Doku-Pfade sind lang).
+            if (d is String && d.startsWith('https://docs.github.com/')) {
+              documentationUrl =
+                  SyncLog.clip(_scrub(d.split('?').first, runs: false));
+            }
+          }
+        } catch (_) {
+          // Kein JSON: weglassen.
+        }
+      }
+      var headers = <String, String>{};
+      for (var h in _headerWhitelist) {
+        var v = _header(response, h);
+        if (v != null) headers[h] = _scrub(v);
+      }
+      log.record(
+          epoch: _epoch,
+          operation: operation,
+          method: method,
+          endpoint: endpoint,
+          status: status,
+          result: _resultFor(operation, response),
+          message: message,
+          documentationUrl: documentationUrl,
+          owner: owner,
+          repo: repo,
+          branch: branch,
+          path: _maskedPath,
+          headers: headers);
+    } catch (_) {
+      // Die Diagnose darf nie einen Fehler auslösen.
+    }
+  }
+
+  /// Die Antwort war da, ließ sich aber nicht auswerten (nur der Status).
+  void parseError(int status) {
+    try {
+      log.record(
+          epoch: _epoch,
+          operation: operation,
+          result: 'parseError',
+          status: status,
+          owner: owner,
+          repo: repo,
+          branch: branch);
+    } catch (_) {}
+  }
+
+  /// Transportfehler: nur der Typ, nie `toString()` (nennt die URL).
+  void failure(String method, Object error) {
+    try {
+      log.record(
+          epoch: _epoch,
+          operation: operation,
+          method: method,
+          endpoint: endpoint,
+          result: 'network',
+          owner: owner,
+          repo: repo,
+          branch: branch,
+          path: _maskedPath,
+          detail: 'error: ${error.runtimeType}');
+    } catch (_) {}
+  }
+
+  void timeout(String method, Duration timeout) {
+    try {
+      log.record(
+          epoch: _epoch,
+          operation: operation,
+          method: method,
+          endpoint: endpoint,
+          result: 'timeout',
+          owner: owner,
+          repo: repo,
+          branch: branch,
+          path: _maskedPath,
+          detail: 'aborted after ${timeout.inMilliseconds} ms');
+    } catch (_) {}
+  }
 }
