@@ -146,7 +146,7 @@ String describeError(Object error) {
       error is NoLocalDatabaseException ||
       error is LocalDatabaseExistsException ||
       error is LocalDatabaseUnreadableException ||
-      error is GithubFileMissingException ||
+      error is RemoteFileMissingException ||
       error is DatabaseTooLargeException ||
       error is LocalStoreException) {
     return error.toString();

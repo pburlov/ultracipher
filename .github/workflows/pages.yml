@@ -41,6 +41,15 @@ jobs:
 
       - run: flutter test --concurrency=4
 
+      # Tests des Sync-Servers (server/firebase/functions); sie brauchen nur
+      # handler.js, deshalb kein npm install.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - run: node --test
+        working-directory: server/firebase/functions
+
   build:
     needs: ci
     # Nie fuer Pull Requests (Forks); nur mit gesetzter Repo-Variable.

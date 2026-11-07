@@ -365,12 +365,17 @@ class UltracipherDatabase {
   /// Der Wert ist unveraenderlich. Die Einstellungen stehen nie im CSV-Export.
   DatabaseSettings? get settings => _settings;
 
-  /// Setzt die Einstellungen neu. [github] null heisst ausdruecklich "GitHub
-  /// entfernt" und gewinnt mit seinem Zeitstempel gegen aeltere Werte. [time]
-  /// ist der Aenderungszeitpunkt (Standard: jetzt); er entscheidet beim
-  /// [merge], welcher Wert gilt.
-  void setSettings({GithubSettings? github, DateTime? time}) {
-    _settings = DatabaseSettings(time: time ?? DateTime.now(), github: github);
+  /// Setzt die Einstellungen neu. [github] und [server] sind die beiden
+  /// moeglichen Sync-Orte; null heisst ausdruecklich "nicht gesetzt" (beide
+  /// null: "Sync entfernt") und gewinnt mit seinem Zeitstempel gegen aeltere
+  /// Werte. Gesetzt wird hoechstens eines von beiden (der Core nimmt bei
+  /// beiden GitHub); das erzwingt das Modell nicht. [time] ist der
+  /// Aenderungszeitpunkt (Standard: jetzt); er entscheidet beim [merge],
+  /// welcher Wert gilt.
+  void setSettings(
+      {GithubSettings? github, ServerSettings? server, DateTime? time}) {
+    _settings = DatabaseSettings(
+        time: time ?? DateTime.now(), github: github, server: server);
   }
 
   VersionedEntry? getEntryWhitId(dynamic id) {
@@ -650,20 +655,73 @@ class GithubSettings {
       'GithubSettings(owner: $owner, repo: $repo, branch: $branch)';
 }
 
+/// Adresse eines eigenen Sync-Servers (REST) als backend-neutraler Wert im
+/// Modell. [url] ist die Basis-URL ohne abschliessenden `/`; die Datei der
+/// Datenbank liegt unter `<url>/<name>`. Der Server hat keine Anmeldung, es
+/// gibt also kein Geheimnis ausser der URL selbst (sie kann einen geheimen
+/// Pfadteil tragen, deshalb steht sie nie im Sync-Log).
+///
+/// Unveraenderlich. Die Pruefung der URL ist Sache des Cores (`RestBackend`),
+/// das Modell liest jeden String.
+class ServerSettings {
+  static const String URL = 'url';
+
+  final String url;
+
+  const ServerSettings({required this.url});
+
+  factory ServerSettings.fromJson(Map<String, dynamic> data) {
+    var url = data[URL];
+    if (url is! String) {
+      throw FormatException(
+          'server $URL has unexpected type ${url.runtimeType}, expected String');
+    }
+    return ServerSettings(url: url);
+  }
+
+  Map<String, dynamic> toJson() => {URL: url};
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is ServerSettings && url == other.url;
+
+  @override
+  int get hashCode => url.hashCode;
+
+  // Ohne URL: sie kann einen geheimen Pfadteil tragen.
+  @override
+  String toString() => 'ServerSettings()';
+}
+
 /// Einstellungen einer Datenbank als Last-Writer-Wins-Register.
 ///
-/// [time] ist der Aenderungszeitpunkt (UTC). [github] null ist ein ausdruecklicher
-/// Wert ("GitHub entfernt") und gewinnt mit neuerer [time] gegen aeltere Werte.
-/// Ein fehlendes Register (`UltracipherDatabase.settings == null`) heisst
-/// dagegen "nie etwas gesetzt" und verliert gegen jeden Wert.
+/// [time] ist der Aenderungszeitpunkt (UTC). [github] und [server] sind die
+/// beiden moeglichen Sync-Orte, hoechstens einer ist gesetzt (sind beide
+/// gesetzt, gilt im Core GitHub). Beide null ist ein ausdrueckliches "Sync
+/// entfernt" und gewinnt mit neuerer [time] gegen aeltere Werte. Ein fehlendes
+/// Register (`UltracipherDatabase.settings == null`) heisst dagegen "nie etwas
+/// gesetzt" und verliert gegen jeden Wert.
+///
+/// Der Schluessel `server` ist, anders als `github`, kein Pflichtschluessel:
+/// Datenbanken aelterer App-Staende haben ihn nicht (fehlt = null), und
+/// `toJson` laesst ihn bei null weg, damit sich der Text bestehender
+/// Datenbanken nicht aendert. Eine aeltere App-Version kennt `server` nicht
+/// und verliert ihn beim Speichern (hingenommen, siehe AGENTS.md).
 class DatabaseSettings implements Comparable<DatabaseSettings> {
   static const String TIME = 'time';
   static const String GITHUB = 'github';
+  static const String SERVER = 'server';
 
   final DateTime time;
   final GithubSettings? github;
+  final ServerSettings? server;
 
-  DatabaseSettings({required DateTime time, this.github}) : time = time.toUtc();
+  /// Der Sync-Server, der gilt: [server], solange kein [github] gesetzt ist
+  /// (sind beide gesetzt, gewinnt GitHub). Eine Regel für Core und UI.
+  ServerSettings? get activeServer => github == null ? server : null;
+
+  DatabaseSettings({required DateTime time, this.github, this.server})
+      : time = time.toUtc();
 
   factory DatabaseSettings.fromJson(Map<String, dynamic> data) {
     var time = data[TIME];
@@ -680,25 +738,38 @@ class DatabaseSettings implements Comparable<DatabaseSettings> {
       throw FormatException('settings $GITHUB missing');
     }
     var github = data[GITHUB];
-    if (github == null) {
-      return DatabaseSettings(time: parsed);
-    }
-    if (github is! Map) {
+    if (github != null && github is! Map) {
       throw FormatException(
           'settings $GITHUB has unexpected type ${github.runtimeType}, expected Map');
     }
+    // `server` darf fehlen (aeltere Datenbanken) und ist dann null.
+    var server = data[SERVER];
+    if (server != null && server is! Map) {
+      throw FormatException(
+          'settings $SERVER has unexpected type ${server.runtimeType}, expected Map');
+    }
     return DatabaseSettings(
         time: parsed,
-        github: GithubSettings.fromJson(Map<String, dynamic>.from(github)));
+        github: github == null
+            ? null
+            : GithubSettings.fromJson(Map<String, dynamic>.from(github as Map)),
+        server: server == null
+            ? null
+            : ServerSettings.fromJson(Map<String, dynamic>.from(server as Map)));
   }
 
   Map<String, dynamic> toJson() => {
         TIME: time.toIso8601String(),
         GITHUB: github?.toJson(),
+        if (server != null) SERVER: server!.toJson(),
       };
 
-  // Kanonische Form des Werts fuer den Tie-Break bei gleicher Zeit.
-  String get _canonicalValue => jsonEncode(github?.toJson());
+  // Kanonische Form des Werts fuer den Tie-Break bei gleicher Zeit. Ohne
+  // server bleibt sie byte-gleich zur Form vor dem Feld `server`, sonst
+  // entschiede das Hinzufuegen des Felds ueber bestehende Gleichstaende neu.
+  String get _canonicalValue => server == null
+      ? jsonEncode(github?.toJson())
+      : jsonEncode({GITHUB: github?.toJson(), SERVER: server!.toJson()});
 
   /// Gesamtordnung: erst nach [time] (als Zeitpunkt), bei gleicher Zeit nach
   /// dem kanonischen JSON-String des Werts. Das Maximum darunter ist
@@ -715,14 +786,16 @@ class DatabaseSettings implements Comparable<DatabaseSettings> {
       identical(this, other) ||
       other is DatabaseSettings &&
           time.isAtSameMomentAs(other.time) &&
-          github == other.github;
+          github == other.github &&
+          server == other.server;
 
   @override
-  int get hashCode => _combineHashes([time.microsecondsSinceEpoch, github]);
+  int get hashCode =>
+      _combineHashes([time.microsecondsSinceEpoch, github, server]);
 
   @override
   String toString() => 'DatabaseSettings(time: ${time.toIso8601String()}, '
-      'github: ${github ?? 'none'})';
+      'github: ${github ?? 'none'}, server: ${server == null ? 'none' : 'set'})';
 }
 
 /// Ergebnis von [UltracipherDatabase.importFromCsv].

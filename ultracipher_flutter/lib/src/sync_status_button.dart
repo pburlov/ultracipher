@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ultracipher_flutter/src/core.dart';
 
+import 'backend/remote_backend.dart' show remoteNameInSentence;
 import 'commons.dart';
 import 'sync.dart';
 
@@ -43,14 +44,21 @@ String _duration(Duration d) {
   return '${d.inSeconds < 1 ? 1 : d.inSeconds} s';
 }
 
+String _capitalize(String text) =>
+    text.isEmpty ? text : text[0].toUpperCase() + text.substring(1);
+
 /// Text zum Zustand, für Tooltip und Hinweise. Fehlertexte laufen über
 /// [describeError]; die ursprüngliche Ausnahme ([SyncStatus.cause]) wird nie
 /// angezeigt.
-String syncStatusText(SyncStatus status) {
+///
+/// [remoteName] ist der `displayName` des Backends der Sitzung ("GitHub",
+/// "Sync server"); `null` nennt es neutral "the remote".
+String syncStatusText(SyncStatus status, {String? remoteName}) {
+  var where = remoteNameInSentence(remoteName ?? 'the remote');
   var error = status.error == null ? null : describeError(status.error!);
   switch (status.state) {
     case SyncState.synced:
-      return 'Synced with GitHub';
+      return 'Synced with $where';
     case SyncState.syncing:
       return 'Syncing...';
     case SyncState.notSynced:
@@ -63,13 +71,14 @@ String syncStatusText(SyncStatus status) {
       }
       return 'Not synced: $error.$retry Changes are stored on this device.';
     case SyncState.authRequired:
-      return 'GitHub rejected the access${error == null ? '' : ' ($error)'}. '
-          'Enter the token again in "GitHub settings".';
+      return '${_capitalize(where)} rejected the access'
+          '${error == null ? '' : ' ($error)'}. '
+          'Enter the token again in the "Sync server" settings.';
     case SyncState.remoteMissing:
       return error ??
-          'Database no longer found on GitHub - passphrase changed?';
+          'Database no longer found on $where - passphrase changed?';
     case SyncState.noRemote:
-      return 'Only stored on this device (no GitHub)';
+      return 'Only stored on this device (no sync set up)';
   }
 }
 
@@ -84,13 +93,17 @@ class SyncStatusButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<SyncStatus>(
       valueListenable: UltracipherApp.instance.syncStatus,
-      builder: (context, status, _) => IconButton(
-        key: const Key('syncStatusButton'),
-        tooltip: '${syncStatusText(status)}\nTap to sync now',
-        icon: Icon(syncStateIcon(status.state),
-            color: syncStateColor(status.state)),
-        onPressed: onTap,
-      ),
+      builder: (context, status, _) {
+        var remoteName = UltracipherApp.instance.remoteBackend?.displayName;
+        return IconButton(
+          key: const Key('syncStatusButton'),
+          tooltip: '${syncStatusText(status, remoteName: remoteName)}\n'
+              'Tap to sync now',
+          icon: Icon(syncStateIcon(status.state),
+              color: syncStateColor(status.state)),
+          onPressed: onTap,
+        );
+      },
     );
   }
 }

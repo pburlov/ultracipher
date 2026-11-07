@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ultracipher_flutter/src/core.dart';
 
 import 'commons.dart';
-import 'github_settings.dart';
+import 'sync_choice.dart';
 import 'progess_screen.dart';
 
 // Die Abläufe "New" und "Import" des Startscreens (Plan §3.4). Beide sind
@@ -23,10 +23,10 @@ Future<bool> offerRemoveUnreadableDatabase(
       title: Text('Local copy cannot be read'),
       content: Text('The copy of this database on this device is damaged and '
           'cannot be opened. It was left untouched.\n\n'
-          'You can remove it. WARNING: if this database is not on GitHub, the '
-          'damaged copy is the only one, and removing it deletes the database '
-          'for good. Remove it only if you can restore the data from GitHub '
-          'or from an export.'),
+          'You can remove it. WARNING: if this database is not synced to '
+          'GitHub or a sync server, the damaged copy is the only one, and '
+          'removing it deletes the database for good. Remove it only if you '
+          'can restore the data from the remote copy or from an export.'),
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -51,8 +51,8 @@ Future<bool> offerRemoveUnreadableDatabase(
   }
 }
 
-/// "New": Passphrase plus Bestätigung, dann (nach dem Anlegen) die
-/// GitHub-Konfiguration mit "Skip".
+/// "New": Passphrase plus Bestätigung, dann (nach dem Anlegen) die Auswahl
+/// GitHub / eigener Sync server mit "Skip".
 class NewDatabaseScreen extends StatefulWidget {
   const NewDatabaseScreen({Key? key}) : super(key: key);
 
@@ -197,7 +197,7 @@ class _NewDatabaseScreenState extends State<NewDatabaseScreen> {
     // die Datenbankansicht frei, die main.dart schon darunter gebaut hat.
     if (!navigator.mounted) return;
     navigator.pushReplacement(MaterialPageRoute<bool>(
-        builder: (context) => const GithubSettingsScreen(setup: true)));
+        builder: (context) => const SyncChoiceScreen(setup: true)));
   }
 
   Future<void> _openExisting(String passphrase) async {

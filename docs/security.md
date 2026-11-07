@@ -4,7 +4,7 @@
 >
 > **Not audited.** Neither the design nor the implementation has had an independent security audit. The cryptographic primitives come from a pure-Dart library (`pointycastle`) that is not formally audited either. Treat this document as an explanation of intent, not as a guarantee.
 
-Ultracipher is an end-to-end encrypted database for passwords and notes. Everything is encrypted on your device with a key derived from your passphrase. The encrypted file is stored in a GitHub repository that you choose.
+Ultracipher is an end-to-end encrypted database for passwords and notes. Everything is encrypted on your device with a key derived from your passphrase. The encrypted file is stored in a GitHub repository that you choose, or on a sync server that you run yourself.
 
 ## Contents
 
@@ -25,7 +25,7 @@ Ultracipher is an end-to-end encrypted database for passwords and notes. Everyth
 | Goal | What it means |
 |---|---|
 | End-to-end encryption | Plaintext and keys exist only on your devices. GitHub only ever sees ciphertext. |
-| No server of our own | There is no Ultracipher backend. Your own GitHub repository is the storage. Nobody operates infrastructure that could be breached or shut down. |
+| No server of our own | There is no Ultracipher backend. Your own GitHub repository, or a sync server you operate yourself, is the storage. Nobody operates infrastructure that could be breached or shut down. |
 | Local-first | The app works on a local encrypted copy. Changes are saved locally first and synced in the background. No network, no problem. |
 | No single algorithm | Defence in depth: several independent ciphers, two independent hash families and two independent key-derivation functions. Breaking one of them is not enough. |
 | Simple to explain | Few moving parts, one place where primitives are combined, fixed allow-lists instead of negotiable parameters. |
@@ -240,6 +240,20 @@ flowchart LR
 - **Changing the passphrase** creates a new database name: the app writes the new file, then deletes the old file in the repository and the old local copy.
 - **Hung requests.** Every GitHub request is aborted after a timeout (30 s); an unreachable server shows up as "not synced" instead of blocking the app.
 - **Stolen token.** A leaked GitHub token gives access to the repository (reading, overwriting or deleting the ciphertext), not to the plaintext. Use a fine-grained token limited to the one repository and the contents permission.
+
+### Sync server (REST)
+
+Instead of GitHub, the settings inside the database can point to a **sync server** that you run yourself (a Firebase function is included, see [self-hosting.md](self-hosting.md); the project operates no public server). It stores the same encrypted file as the GitHub file, as raw bytes without base64. Only the URL is configured: **there is no authentication.** That is a deliberate trade-off for simplicity, and it has consequences.
+
+- **Version conflicts.** The server stores a version per file (an `ETag`; the Firebase function uses the Cloud Storage object generation) and evaluates `If-Match` / `If-None-Match` atomically. Two devices that write from the same version cannot overwrite each other: one gets `412`, then reads, merges and writes again. Creating a file is separate from replacing it, so a device cannot silently re-create a file that was deleted after a passphrase change. The protocol is described in [self-hosting.md](self-hosting.md#the-protocol-for-your-own-implementation).
+- **What an attacker with the URL and the database name can do.** Overwrite or delete the server copy, and read the ciphertext. The name has 256 bits and the server has no listing, so it cannot be guessed; it is known to whoever has seen an export or a log containing it (the app's sync log never shows the full name). Reading yields only ciphertext, as with a public GitHub repository.
+- **What an attacker cannot do.** Read or forge content: the file is encrypted and carries two MACs, so a manipulated file is rejected (the sync shows "not synced" and writes nothing). The **local copy is not affected**; losing the server copy is recoverable from any device that holds the database. The attacker also cannot learn the passphrase or the root secret from the server.
+- **Cost.** Anyone can store files under arbitrary valid names (16 MiB each) in your bucket. The function limits instances and size; set a budget alert.
+- **Transport.** The app requires `https://` (`http://` only for `localhost`). TLS protects the version and the ciphertext in transit, as for GitHub.
+- **Server logs and metadata.** The function never logs names or contents, but the platform's request logs and the file size, timing and name of each stored file are visible to whoever operates the server.
+- **Foreign bytes under the app's origin.** With the Hosting setup the sync server shares the web app's origin, and anyone who knows the URL and a name can put arbitrary bytes there. The function therefore sends `X-Content-Type-Options: nosniff` on every response and, on reads, `Content-Security-Policy: default-src 'none'; sandbox` and `Content-Disposition: attachment`, so a browser never renders or runs those bytes as a page. All responses are `Cache-Control: no-store`.
+- **Web app.** The page's Content-Security-Policy allows the same origin and `https://api.github.com`. The sync server is therefore reachable from the web app when it shares the origin (the Firebase Hosting setup) or when its host is added to `connect-src` in your own build; the native apps are not restricted.
+- The URL is part of the settings and is encrypted in the database like the GitHub token; it travels in every encrypted export and with the sync. Older app versions do not know the setting and drop it when they save, so update all devices before switching to a sync server.
 
 ### Local storage
 

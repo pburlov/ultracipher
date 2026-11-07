@@ -12,6 +12,10 @@ notes.
   stored as `<name>.txt` in a repository you choose (its default branch unless
   you name one) and merged across devices.
   GitHub only ever sees ciphertext. The app has no server of its own.
+- **Optional sync through your own sync server.** Instead of GitHub the
+  encrypted file can be stored by a small REST service that you run yourself
+  (a ready-made Firebase function is included). There is no public server. See
+  [docs/self-hosting.md](docs/self-hosting.md).
 - **Layered encryption.** Argon2id and scrypt for key derivation, then a
   cascade of AES-256, Twofish-256 and ChaCha20 with two independent MACs. The
   full description is in [docs/security.md](docs/security.md).
@@ -93,7 +97,20 @@ deployment, build it yourself and compare the files.
 Clickjacking: GitHub Pages sets no HTTP headers, and `frame-ancestors` has no
 effect in a `<meta>` CSP, so the page cannot forbid being embedded in a frame.
 If you host somewhere that can set headers, add `Content-Security-Policy:
-frame-ancestors 'none'` (or `X-Frame-Options: DENY`).
+frame-ancestors 'none'` (or `X-Frame-Options: DENY`). The Firebase Hosting setup in
+[docs/self-hosting.md](docs/self-hosting.md) does this through
+[`firebase.json`](firebase.json).
+
+### Hosting the web version and a sync server on Firebase
+
+Instead of GitHub Pages you can serve the web version from Firebase Hosting
+together with the optional sync server (a Cloud Function in
+[`server/firebase/`](server/firebase/)) in your own Firebase project. Both then
+share one origin, so the CSP stays as it is. The workflow
+[`.github/workflows/firebase.yml`](.github/workflows/firebase.yml) deploys it
+from your fork, again only with repository variables and no code change. The
+steps, the sync server protocol (for implementations on other platforms) and the
+security notes are in [docs/self-hosting.md](docs/self-hosting.md).
 
 ### Limitations of the web version
 
@@ -121,6 +138,8 @@ untouched.
 
 - [docs/security.md](docs/security.md): key derivation, encryption layers, file
   format, sync, threat model.
+- [docs/self-hosting.md](docs/self-hosting.md): Firebase Hosting and sync server
+  in your own project, sync server protocol.
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## License

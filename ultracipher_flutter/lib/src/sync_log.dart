@@ -1,8 +1,9 @@
 import 'package:flutter/foundation.dart';
 
-/// Ein Eintrag des Sync-Logs: eine GitHub-Anfrage samt Antwort oder ein
-/// Wechsel des Sync-Status. Nur Diagnosefelder, nie Token, Header
-/// `Authorization`, URLs, Datenbankinhalt oder der volle Datenbankname.
+/// Ein Eintrag des Sync-Logs: eine Anfrage an GitHub oder den Sync-Server samt
+/// Antwort oder ein Wechsel des Sync-Status. Nur Diagnosefelder, nie Token,
+/// Header `Authorization`, URLs (vom Sync-Server nur der Host), Datenbankinhalt
+/// oder der volle Datenbankname.
 class SyncLogEntry {
   final DateTime time;
 
@@ -27,6 +28,10 @@ class SyncLogEntry {
   final String? repo;
   final String? branch;
 
+  /// Nur beim Sync-Server: der Host der URL, nie Pfad oder Query (der Pfad
+  /// kann ein Geheimnis tragen).
+  final String? host;
+
   /// Nur der maskierte Pfad (`abcdef...<.txt`).
   final String? path;
 
@@ -48,6 +53,7 @@ class SyncLogEntry {
     this.owner,
     this.repo,
     this.branch,
+    this.host,
     this.path,
     this.headers = const {},
     this.detail,
@@ -68,6 +74,7 @@ class SyncLogEntry {
       if (owner != null) 'owner=$owner',
       if (repo != null) 'repo=$repo',
       if (branch != null) 'branch=$branch',
+      if (host != null) 'host=$host',
       if (path != null) 'path=$path',
     ];
     if (target.isNotEmpty) buf.write('\n  ${target.join(' ')}');
@@ -141,6 +148,7 @@ class SyncLog extends ChangeNotifier {
     String? owner,
     String? repo,
     String? branch,
+    String? host,
     String? path,
     Map<String, String> headers = const {},
     String? detail,
@@ -161,6 +169,7 @@ class SyncLog extends ChangeNotifier {
         owner: c(owner),
         repo: c(repo),
         branch: c(branch),
+        host: c(host),
         path: c(path),
         headers: {for (var e in headers.entries) e.key: clip(e.value, 100)},
         detail: c(detail),

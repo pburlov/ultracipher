@@ -104,8 +104,10 @@ class FakeRemoteBackend implements RemoteBackend {
   @override
   String get id => 'fake';
 
+  /// The fake stands in for GitHub in most tests; tests of the sync server
+  /// set it to `'Sync server'`.
   @override
-  String get displayName => 'Fake';
+  String displayName = 'GitHub';
 
   @override
   Future<RemoteData> read(String name) async {

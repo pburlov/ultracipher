@@ -15,7 +15,7 @@ import 'sync_log_screen.dart';
 /// Wird von "New" (mit [setup], Zurück bedeutet Skip) und später vom Menü der
 /// geöffneten Datenbank benutzt. Die Datenbank muss schon offen sein
 /// (`configureGithub` arbeitet auf der Sitzung). Während `configureGithub` und
-/// `removeGithub` läuft, liegt eine Sperre über der ganzen App
+/// `removeRemote` läuft, liegt eine Sperre über der ganzen App
 /// ([runWithProgress]): nichts kann bearbeitet werden. Das Ergebnis der Route
 /// ist `true`, wenn GitHub eingerichtet oder entfernt wurde.
 ///
@@ -43,6 +43,10 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
 
   bool get _hasGithub =>
       UltracipherApp.instance.loadedDatabase.value?.settings?.github != null;
+
+  bool get _hasServer =>
+      UltracipherApp.instance.loadedDatabase.value?.settings?.activeServer !=
+      null;
 
   @override
   void initState() {
@@ -85,7 +89,11 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
                         : _hasGithub
                             ? 'Enter the token again to change the GitHub '
                                 'access of this database.'
-                            : 'Sync this database with a GitHub repository.'),
+                            : _hasServer
+                                ? 'This database syncs with a sync server. '
+                                    'Connecting GitHub replaces it.'
+                                : 'Sync this database with a GitHub '
+                                    'repository.'),
                   ),
                   Padding(
                     padding: EdgeInsets.all(5),
@@ -186,7 +194,8 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
     var token = _token.text;
     var repo = _repo.text;
     var branch = _branch.text;
-    // M-f (Plan §9): GitHub wurde entfernt (nicht: nie eingerichtet). Core
+    // M-f (Plan §9): der Sync wurde entfernt (nicht: nie eingerichtet, und
+    // nicht: ein Sync-Server ist gesetzt, dann ist es ein Wechsel). Core
     // zählt das als Erstkonfiguration und legt eine fehlende Datei ohne
     // Rückfrage an; nach einem Passphrase-Wechsel auf einem anderen Gerät
     // brächte das die alte Datenbank zurück. Darum hier vorher fragen.
@@ -194,7 +203,8 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
     if (!confirmCreate &&
         !widget.setup &&
         settings != null &&
-        settings.github == null) {
+        settings.github == null &&
+        settings.server == null) {
       var proceed = await _confirmReconnect();
       if (proceed != true || !mounted) return;
     }
@@ -315,7 +325,7 @@ class _GithubSettingsScreenState extends State<GithubSettingsScreen> {
     GithubSettingsResult result;
     try {
       result = await runWithProgress(
-          context, () => UltracipherApp.instance.removeGithub(),
+          context, () => UltracipherApp.instance.removeRemote(),
           title: 'Removing GitHub...');
     } catch (e) {
       if (mounted) setState(() => _error = describeError(e));

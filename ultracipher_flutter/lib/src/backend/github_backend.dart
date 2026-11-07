@@ -129,7 +129,7 @@ class GithubBackend implements RemoteBackend {
       trace?.timeout(method, timeout);
       if (!abort.isCompleted) abort.complete();
       finish();
-      throw RemoteTimeoutException(timeout);
+      throw RemoteTimeoutException(timeout, 'GitHub');
     });
   }
 

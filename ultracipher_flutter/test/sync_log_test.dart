@@ -14,6 +14,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ultracipher_flutter/src/backend/github_backend.dart';
 import 'package:ultracipher_flutter/src/backend/remote_backend.dart';
+import 'package:ultracipher_flutter/src/backend/rest_backend.dart';
 import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/github_settings.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
@@ -573,6 +574,154 @@ void main() {
       expect(a.toString(), 'GitHub request failed with status 500');
       expect(b.toString(), a.toString());
       expect(b.toString(), isNot(contains(_token)));
+    });
+  });
+
+  group('RestBackend logging', () {
+    const secretPath = 'SECRET-PATH-SEGMENT-0123456789';
+    const url = 'https://sync.example.test/ucdb/$secretPath';
+
+    RestBackend rest(http.Client client, SyncLog log,
+            {Duration timeout = const Duration(seconds: 5)}) =>
+        RestBackend(
+            url: url, client: client, log: log, requestTimeout: timeout);
+
+    test('requests are logged with method, status, result, host and the '
+        'masked name', () async {
+      var log = _log();
+      var statuses = <String, int>{'GET': 404, 'PUT': 201, 'DELETE': 412};
+      var client = MockClient((request) async => http.Response(
+          '', statuses[request.method]!,
+          headers: {'ETag': '"7"', 'Retry-After': '9'}));
+      var backend = rest(client, log);
+
+      await backend.read(_name);
+      await backend.write(_name, Uint8List.fromList([1, 2]));
+      await expectLater(
+          backend.delete(_name, '3'), throwsA(isA<RemoteConflictException>()));
+      statuses['GET'] = 429;
+      await expectLater(
+          backend.read(_name), throwsA(isA<RemoteRateLimitException>()));
+      statuses['GET'] = 500;
+      await expectLater(
+          backend.read(_name), throwsA(isA<RemoteBackendException>()));
+
+      var entries = log.entries.toList().reversed.toList();
+      expect(entries.map((e) => e.operation),
+          ['read file', 'put', 'delete', 'read file', 'read file']);
+      expect(entries.map((e) => e.method),
+          ['GET', 'PUT', 'DELETE', 'GET', 'GET']);
+      expect(entries.map((e) => e.status), [404, 201, 412, 429, 500]);
+      expect(entries.map((e) => e.result), [
+        'remoteMissing',
+        'ok',
+        'conflict',
+        'rateLimit',
+        'httpError',
+      ]);
+      expect(entries.every((e) => e.host == 'sync.example.test'), isTrue);
+      expect(entries.every((e) => e.endpoint == 'file'), isTrue);
+      expect(entries.every((e) => e.path == 'QWJjZG...<'), isTrue);
+      expect(entries[3].headers, {'retry-after': '9'});
+      expect(entries.first.toText(), contains('host=sync.example.test'));
+    });
+
+    test('NEVER URL (path), name, content, response body or headers', () async {
+      var log = _log();
+      var echo = '$url $_name ${_inner()} $_plain';
+      var client = MockClient((request) async {
+        if (request.method == 'GET') {
+          return http.Response.bytes(utf8.encode('CIPHERTEXT-$_plain'), 200,
+              headers: {'ETag': '"7"', 'X-Echo': echo});
+        }
+        if (request.method == 'PUT') {
+          // Ein eigener Server kann in eine Fehlerantwort schreiben, was er will.
+          return http.Response('Bad request: $echo', 500,
+              headers: {'Retry-After': echo, 'X-Echo': echo});
+        }
+        throw http.ClientException('failed for $url $_name', request.url);
+      });
+      var backend = rest(client, log);
+
+      await backend.read(_name);
+      await expectLater(
+          backend.write(_name, Uint8List.fromList(utf8.encode(_plain))),
+          throwsA(isA<RemoteBackendException>()));
+      await expectLater(
+          backend.delete(_name, '1'), throwsA(isA<RemoteBackendException>()));
+
+      var text = log.toText();
+      expect(log.length, 3);
+      for (var secret in [
+        secretPath,
+        'ucdb',
+        _name,
+        _name.substring(0, 10),
+        _inner(),
+        _plain,
+        'CIPHERTEXT',
+        'Bad request',
+        'X-Echo',
+        'https://',
+        '?',
+      ]) {
+        expect(text, isNot(contains(secret)), reason: secret);
+      }
+      expect(text, contains('host=sync.example.test'));
+      expect(text, contains('path=QWJjZG...<'));
+      expect(text, contains('error: ClientException'));
+    });
+
+    test('an invalid URL logs nothing and the message has no URL', () async {
+      var log = _log();
+      var backend = RestBackend(
+          url: 'http://example.test/$secretPath',
+          client: MockClient((_) async => http.Response('', 200)),
+          log: log);
+      await expectLater(
+          backend.read(_name), throwsA(isA<RemoteBackendException>()));
+      expect(log.length, 0);
+    });
+
+    test('a timeout is one entry; a late answer adds no second', () async {
+      var log = _log();
+      var hanging = MockClient((_) => Future<http.Response>.delayed(
+          const Duration(milliseconds: 80),
+          () => http.Response('', 200, headers: {'etag': '"1"'})));
+      var backend =
+          rest(hanging, log, timeout: const Duration(milliseconds: 20));
+      await expectLater(
+          backend.read(_name), throwsA(isA<RemoteTimeoutException>()));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(log.length, 1);
+      expect(log.entries.single.result, 'timeout');
+      expect(log.entries.single.host, 'sync.example.test');
+      expect(log.toText(), isNot(contains(secretPath)));
+    });
+
+    test('a 200 without ETag is logged as parseError, status only', () async {
+      var log = _log();
+      var client = MockClient((_) async => http.Response('data', 200));
+      await expectLater(rest(client, log).read(_name),
+          throwsA(isA<RemoteBackendException>()));
+      var results = log.entries.map((e) => e.result).toList();
+      expect(results, ['parseError', 'ok']);
+      expect(log.toText(), isNot(contains(secretPath)));
+    });
+
+    test('an answer arriving after the log was cleared adds no entry',
+        () async {
+      var log = _log();
+      var gate = Completer<void>();
+      var client = MockClient((_) async {
+        await gate.future;
+        return http.Response('', 404);
+      });
+      var pending = rest(client, log).read(_name);
+      log.clear();
+      gate.complete();
+      await pending;
+      expect(log.length, 0);
     });
   });
 

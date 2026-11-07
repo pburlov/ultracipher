@@ -15,3 +15,10 @@ local.properties
 # Build-Ausgaben und Dart-Cache
 build/
 .dart_tool/
+
+# Firebase: die Projekt-ID kommt aus der Repo-Variable FIREBASE_PROJECT_ID,
+# nicht aus einer eingecheckten .firebaserc
+.firebaserc
+.firebase/
+firebase-debug.log
+node_modules/

@@ -12,6 +12,7 @@ import 'package:ultracipher_flutter/src/model/model.dart';
 
 import 'backend/github_backend.dart';
 import 'backend/remote_backend.dart';
+import 'backend/rest_backend.dart';
 import 'crypto/constant_time.dart';
 import 'crypto/format_v1.dart';
 import 'crypto/kdf_profile.dart' as kdf;
@@ -56,17 +57,33 @@ class LocalDatabaseUnreadableException implements Exception {
       '($detail); it was left untouched';
 }
 
-/// [UltracipherApp.configureGithub] fand am Ziel keine Datei, und Anlegen ist
-/// hier nur mit Bestätigung erlaubt (Plan §3.3/E3): die DB hatte schon GitHub
-/// am selben Ort (Token-Neueingabe in `remoteMissing`). Eine fehlende Datei
-/// heißt dann meist "Passphrase geändert", nicht "neu anlegen". Es wurde
-/// nichts geändert; die UI fragt und ruft bei "ja" erneut mit
-/// `confirmCreate: true`. Die Meldung nennt beide Wege.
-class GithubFileMissingException implements Exception {
+/// [UltracipherApp.configureGithub] oder [UltracipherApp.configureServer] fand
+/// am Ziel keine Datei, und Anlegen ist hier nur mit Bestätigung erlaubt
+/// (Plan §3.3/E3): die DB hatte schon einen Sync-Ort am selben Ort
+/// (Token-Neueingabe in `remoteMissing`, dieselbe URL noch einmal). Eine
+/// fehlende Datei heißt dann meist "Passphrase geändert", nicht "neu anlegen".
+/// Es wurde nichts geändert; die UI fragt und ruft bei "ja" erneut mit
+/// `confirmCreate: true`. Die Meldung nennt beide Wege. [target] ist der Name
+/// des Orts im Satz ("GitHub", "the sync server").
+class RemoteFileMissingException implements Exception {
+  final String target;
+
+  RemoteFileMissingException(this.target);
+
   @override
-  String toString() => 'No database file found on GitHub at this location. '
+  String toString() => 'No database file found on $target at this location. '
       'If the passphrase was changed, use "Change passphrase"; otherwise '
-      'create the file on GitHub.';
+      'create the file on $target.';
+}
+
+/// Fehlende Datei bei [UltracipherApp.configureGithub].
+class GithubFileMissingException extends RemoteFileMissingException {
+  GithubFileMissingException() : super('GitHub');
+}
+
+/// Fehlende Datei bei [UltracipherApp.configureServer].
+class ServerFileMissingException extends RemoteFileMissingException {
+  ServerFileMissingException() : super('the sync server');
 }
 
 /// Die verschlüsselte Datenbank wäre größer als das Schreiblimit
@@ -80,8 +97,9 @@ class DatabaseTooLargeException implements Exception {
       'saved.';
 }
 
-/// Ausgang von [UltracipherApp.configureGithub] und
-/// [UltracipherApp.removeGithub] (Erfolg; Fehler werfen).
+/// Ausgang von [UltracipherApp.configureGithub], [UltracipherApp.configureServer]
+/// und [UltracipherApp.removeRemote] (Erfolg; Fehler werfen). Der Name stammt
+/// aus der Zeit, als es nur GitHub gab.
 class GithubSettingsResult {
   /// Die Datei am neuen Ort wurde angelegt.
   final bool created;
@@ -123,6 +141,33 @@ CsvImportResult importCsvInto(UltracipherDatabase db, String csv) {
   } on FormatException catch (e) {
     throw FormatException('The file is not a valid CSV export. ${e.message}');
   }
+}
+
+/// Der Sync-Ort einer Datenbank, wie ihn `settings` beschreibt: höchstens
+/// eines von beiden (E1). Sind in fremden Einstellungen doch beide gesetzt,
+/// gewinnt GitHub; [of] macht daraus immer einen eindeutigen Wert.
+class _RemoteTarget {
+  static const _RemoteTarget none = _RemoteTarget(null, null);
+
+  final GithubSettings? github;
+  final ServerSettings? server;
+
+  const _RemoteTarget(this.github, this.server);
+
+  factory _RemoteTarget.of(DatabaseSettings? settings) {
+    var github = settings?.github;
+    if (github != null) return _RemoteTarget(github, null);
+    return _RemoteTarget(null, settings?.activeServer);
+  }
+
+  bool get isNone => github == null && server == null;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _RemoteTarget && github == other.github && server == other.server;
+
+  @override
+  int get hashCode => (github?.hashCode ?? 0) * 31 + (server?.hashCode ?? 0);
 }
 
 /// [UltracipherApp.syncStatus], das sich merkt, ob in der Sitzung schon
@@ -169,8 +214,9 @@ class UltracipherApp {
   Uint8List? _root;
 
   /// Where the encrypted database is read from and written to. Built from the
-  /// open database's `settings.github`; `null` while no GitHub is configured
-  /// (a local-only database, no session open, after [closeDatabase]).
+  /// open database's `settings.github` or `settings.server`; `null` while
+  /// neither is configured (a local-only database, no session open, after
+  /// [closeDatabase]).
   /// Swappable (tests).
   RemoteBackend? remoteBackend;
 
@@ -359,8 +405,13 @@ class UltracipherApp {
   /// Danach bleibt es bei `notSynced`, der nächste Trigger probiert neu.
   static const int MAX_SYNC_ATTEMPTS = 3;
 
-  static const SyncStatus _remoteMissing = SyncStatus(SyncState.remoteMissing,
-      error: 'Database no longer found on GitHub - passphrase changed?');
+  /// Status für eine fehlende Remote-Datei, mit dem Namen des Backends
+  /// ("GitHub", "Sync server").
+  static SyncStatus _remoteMissingFor(RemoteBackend backend) => SyncStatus(
+      SyncState.remoteMissing,
+      error: 'Database no longer found on '
+          '${remoteNameInSentence(backend.displayName)} - '
+          'passphrase changed?');
 
   late final SingleFlight<SyncStatus> _flight = SingleFlight(_syncOnce);
 
@@ -371,22 +422,42 @@ class UltracipherApp {
   /// [_startSession] bzw. [changeDatabasePassphrase] gesetzt.
   String? _databaseName;
 
-  /// Die `settings.github`, aus denen [remoteBackend] der Sitzung gebaut ist.
-  /// Der Sync vergleicht den Zustand der Datenbank
+  /// Der Sync-Ort aus den Einstellungen, aus dem [remoteBackend] der Sitzung
+  /// gebaut ist. Der Sync vergleicht den Zustand der Datenbank
   /// damit statt mit einem Merge-Delta (B4b) und baut nur bei einem
   /// Unterschied ein Backend.
-  GithubSettings? _backendGithub;
+  _RemoteTarget _backendTarget = _RemoteTarget.none;
 
   /// Testnaht: baut das Backend zu `settings.github`, wenn eine Sitzung
   /// startet oder ein Merge die Einstellungen ändert. Standard:
   /// [GithubBackend] mit `<name>.txt` als Pfad. Gibt es [github] nicht
-  /// (`null`, "GitHub entfernt"), ist das Ergebnis `null`.
+  /// (`null`, "kein GitHub"), ist das Ergebnis `null`; die Naht wird auch
+  /// dann gefragt, solange kein Sync-Server gesetzt ist. Für den Sync-Server
+  /// siehe [serverBackendForSettings].
   @visibleForTesting
   RemoteBackend? Function(GithubSettings? github, Uint8List root)?
       backendForSettings;
 
-  RemoteBackend? _buildBackendFromSettings(
-      GithubSettings? github, Uint8List root) {
+  /// Testnaht wie [backendForSettings], für `settings.server` (nur gefragt,
+  /// wenn ein Server und kein GitHub gesetzt ist). Standard: [RestBackend].
+  @visibleForTesting
+  RemoteBackend? Function(ServerSettings server, Uint8List root)?
+      serverBackendForSettings;
+
+  /// Baut das Backend zu [target]. [httpClient] ist die Testnaht für den
+  /// Standard-[RestBackend] (nur von [configureServer] benutzt; spätere
+  /// Neubauten der Sitzung nehmen den Standard-Client).
+  RemoteBackend? _buildBackendFromSettings(_RemoteTarget target, Uint8List root,
+      {http.Client? httpClient}) {
+    var github = target.github;
+    var server = target.server;
+    if (github == null && server != null) {
+      var serverBuilder = serverBackendForSettings;
+      if (serverBuilder != null) {
+        return serverBuilder(server, root);
+      }
+      return RestBackend(url: server.url, client: httpClient, log: syncLog);
+    }
     var builder = backendForSettings;
     if (builder != null) {
       return builder(github, root);
@@ -415,7 +486,7 @@ class UltracipherApp {
     (syncStatus as _SyncStatusNotifier).sawSynced = false;
     // Der Name wird danach gesetzt (siehe [_startSession]).
     _databaseName = null;
-    _backendGithub = null;
+    _backendTarget = _RemoteTarget.none;
     syncStatus.value = status;
     // Ein im Netz haengender Lauf der alten Sitzung darf den ersten Lauf der
     // neuen nicht aufhalten (er verwirft sein Ergebnis ohnehin).
@@ -546,7 +617,7 @@ class UltracipherApp {
         // Der normale Sync legt nie an: eine fehlende Datei ist
         // `remoteMissing`.
         if (remoteData.isEmpty) {
-          return publish(_remoteMissing);
+          return publish(_remoteMissingFor(backend));
         }
         UltracipherDatabase remoteDatabase;
         try {
@@ -604,26 +675,26 @@ class UltracipherApp {
       // Stand, der gelesen und geschrieben wird, gehoert zum alten Ort).
       var switchBackend = false;
       RemoteBackend? nextBackend;
-      var nextGithub = _backendGithub;
-      var github = database.settings?.github;
-      if (github != _backendGithub) {
-        var rebuilt = _buildBackendFromSettings(github, key);
+      var nextTarget = _backendTarget;
+      var target = _RemoteTarget.of(database.settings);
+      if (target != _backendTarget) {
+        var rebuilt = _buildBackendFromSettings(target, key);
         if (_sameTarget(backend, rebuilt)) {
           // Gleiches Ziel: kein Wechsel, das ueberzaehlige neue wird
           // freigegeben.
           if (!identical(rebuilt, backend)) {
             rebuilt?.close();
           }
-          _backendGithub = github;
+          _backendTarget = target;
         } else {
           switchBackend = true;
           nextBackend = rebuilt;
-          nextGithub = github;
+          nextTarget = target;
         }
       }
       if (switchBackend) {
         remoteBackend = nextBackend;
-        _backendGithub = nextGithub;
+        _backendTarget = nextTarget;
         if (!identical(backend, nextBackend)) {
           backend.close();
         }
@@ -672,7 +743,8 @@ class UltracipherApp {
 
   /// Ob [next] dasselbe Ziel ist wie [current] (dann wird nicht getauscht).
   /// Nur zwei [GithubBackend]s mit gleichem Konto, Repo, Token und Branch
-  /// sind gleich; alles andere gilt als anderes Ziel.
+  /// sind gleich; alles andere gilt als anderes Ziel (bei einem Server ist
+  /// das Ziel schon über [_RemoteTarget] verglichen, die URL ist der Wert).
   static bool _sameTarget(RemoteBackend current, RemoteBackend? next) {
     if (current is GithubBackend && next is GithubBackend) {
       return current.owner == next.owner &&
@@ -1076,13 +1148,14 @@ class UltracipherApp {
   /// ein laufendes Speichern gilt weiter. Gibt das alte Backend zurück; der
   /// Aufrufer schließt es, wenn er es nicht mehr braucht.
   RemoteBackend? _replaceBackend(
-      RemoteBackend? next, GithubSettings? github, SyncStatus status) {
+      RemoteBackend? next, _RemoteTarget target, SyncStatus status) {
     var old = remoteBackend;
     _syncEpoch++;
+    // Backend zuerst: ein Hörer des Status (Tooltip) liest dessen Namen.
+    remoteBackend = next;
+    _backendTarget = target;
     syncStatus.value = status;
     _flight.reset(status);
-    remoteBackend = next;
-    _backendGithub = github;
     return old;
   }
 
@@ -1092,24 +1165,24 @@ class UltracipherApp {
   /// Repositorys, egal ob `main` oder `master`).
   ///
   /// Ablauf: Konto per [GithubBackend.resolveOwner] ermitteln, `<name>.txt`
-  /// am Ziel lesen.
+  /// am Ziel lesen, dann der gemeinsame Teil [_configureRemote]:
   /// - Datei da: der Remote wird hineingemergt (neues Gerät), ist der Stand
   ///   danach verschieden, wird zurückgeschrieben.
   /// - Datei fehlt: angelegt wird nur bei der Erstkonfiguration (vorher kein
-  ///   `settings.github`) oder nach einem Wechsel von Konto, Repo oder
-  ///   Branch, sonst mit [confirmCreate]. Sonst wirft die Methode
-  ///   [GithubFileMissingException] (E3: Token-Neueingabe in `remoteMissing`
-  ///   legt nicht still neu an).
+  ///   Sync-Ort in den Einstellungen) oder nach einem Wechsel von Konto, Repo
+  ///   oder Branch oder von einem Sync-Server zu GitHub, sonst mit
+  ///   [confirmCreate]. Sonst wirft die Methode [GithubFileMissingException]
+  ///   (E3: Token-Neueingabe in `remoteMissing` legt nicht still neu an).
   ///
   /// Alles Netz läuft VOR jeder Änderung am Zustand, auf einer Kopie der
   /// Datenbank. Erst wenn das Ziel den Stand hat, wird er übernommen:
-  /// Einstellungen mit neuer `time` (LWW), Backend getauscht, lokal
-  /// gespeichert. Auth-, Netz- und Konfliktfehler (und eine nicht lesbare
-  /// Remote-Datei) werfen daher mit unverändertem Zustand; einen Netzfehler
-  /// wiederholt der Aufrufer. Konto-, Repo- oder Branch-Wechsel (E1): danach
-  /// wird der gemergte Stand, mit den neuen Einstellungen, einmal an den
-  /// ALTEN Ort geschrieben (Weiterleitung für andere Geräte; die Datei bleibt
-  /// stehen). Scheitert das, ist der Wechsel trotzdem gelungen
+  /// Einstellungen mit neuer `time` (LWW; `server` wird dabei `null`), Backend
+  /// getauscht, lokal gespeichert. Auth-, Netz- und Konfliktfehler (und eine
+  /// nicht lesbare Remote-Datei) werfen daher mit unverändertem Zustand; einen
+  /// Netzfehler wiederholt der Aufrufer. Ein Ortswechsel (E1): danach wird der
+  /// gemergte Stand, mit den neuen Einstellungen, einmal an den ALTEN Ort
+  /// geschrieben (Weiterleitung für andere Geräte; die Datei bleibt stehen).
+  /// Scheitert das, ist der Wechsel trotzdem gelungen
   /// ([GithubSettingsResult.oldLocationError]).
   ///
   /// [httpClient] ist die Testnaht für `resolveOwner`; das Backend entsteht
@@ -1138,50 +1211,157 @@ class UltracipherApp {
     var session = _session;
     bool alive() =>
         session == _session && identical(loadedDatabase.value, database);
-    void requireAlive() {
-      if (!alive()) {
-        throw RemoteBackendException('The database was closed meanwhile; '
-            'GitHub settings were not changed');
-      }
-    }
 
     var owner = await GithubBackend.resolveOwner(newToken,
         client: httpClient, log: syncLog);
-    requireAlive();
+    if (!alive()) {
+      throw RemoteBackendException('The database was closed meanwhile; '
+          'GitHub settings were not changed');
+    }
     var newGithub = GithubSettings(
         token: newToken, owner: owner, repo: newRepo, branch: newBranch);
-    var newBackend = _buildBackendFromSettings(newGithub, key)!;
+    var target = _RemoteTarget(newGithub, null);
+    var newBackend = _buildBackendFromSettings(target, key)!;
 
-    // Ab hier: Kopie. Die offene Datenbank bleibt unberuehrt, bis das Ziel
-    // den Stand hat.
-    var candidate = UltracipherDatabase.fromJson(database.toJson());
-    var previous = database.settings?.github;
+    var previous = _RemoteTarget.of(database.settings);
+    var previousGithub = previous.github;
     // Ein Wechsel des Kontos (anderes Token, anderer Besitzer) zaehlt wie ein
-    // Wechsel von Repo oder Branch: anlegen ohne Rueckfrage und
-    // Weiterleitung (bewusst so entschieden).
-    var moved = previous != null &&
-        (previous.owner != owner ||
-            previous.repo != newRepo ||
-            previous.branch != newBranch);
+    // Wechsel von Repo oder Branch, und ein Wechsel vom Sync-Server zu GitHub
+    // ebenso: anlegen ohne Rueckfrage und Weiterleitung (bewusst so
+    // entschieden).
+    var moved = !previous.isNone &&
+        (previousGithub == null ||
+            previousGithub.owner != owner ||
+            previousGithub.repo != newRepo ||
+            previousGithub.branch != newBranch);
     // Aendert sich nur der Branch und ist eine Seite leer (Standard-Branch),
     // kann es dieselbe Datei sein (Standard-Branch = der benannte): dann ist
     // ein Wechsel keine Erlaubnis zum stillen Neuanlegen (E3). Die
     // Weiterleitung bleibt, der Merge dort ist verlustfrei.
-    var maybeSameFile = previous != null &&
+    var maybeSameFile = previousGithub != null &&
         moved &&
-        previous.owner == owner &&
-        previous.repo == newRepo &&
-        (previous.branch.isEmpty || newBranch.isEmpty);
+        previousGithub.owner == owner &&
+        previousGithub.repo == newRepo &&
+        (previousGithub.branch.isEmpty || newBranch.isEmpty);
+    return _configureRemote(
+        database: database,
+        name: name,
+        key: key,
+        target: target,
+        newBackend: newBackend,
+        alive: alive,
+        hadRemote: !previous.isNone,
+        moved: moved,
+        maybeSameFile: maybeSameFile,
+        confirmCreate: confirmCreate,
+        fileMissing: () => GithubFileMissingException());
+  }
+
+  /// Richtet den Sync-Server (REST) für die offene Datenbank ein oder ändert
+  /// ihn. [url] wird geprüft und normalisiert ([RestBackend.normalizeUrl];
+  /// ein ungültiger Wert wirft den Text für den Nutzer, ohne etwas zu
+  /// ändern). Ablauf und Regeln wie bei [configureGithub] ([_configureRemote]);
+  /// ein Ortswechsel ist hier eine andere URL oder ein Wechsel von GitHub zum
+  /// Sync-Server. Eine fehlende Datei am selben Ort legt nur [confirmCreate]
+  /// an, sonst wirft die Methode [ServerFileMissingException]. Die
+  /// Einstellungen setzen dabei `github` auf `null`.
+  ///
+  /// [httpClient] ist die Testnaht für das [RestBackend], das hier entsteht
+  /// (und, wenn der Wechsel gelingt, das der Sitzung ist); ohne ihn nimmt es
+  /// den Standard-Client. Die Naht [serverBackendForSettings] hat Vorrang.
+  Future<GithubSettingsResult> configureServer(
+      {required String url,
+      bool confirmCreate = false,
+      http.Client? httpClient}) async {
+    var database = loadedDatabase.value;
+    var name = _databaseName;
+    var key = _root;
+    if (database == null || name == null || key == null) {
+      return Future.error('No database open');
+    }
+    String normalized;
+    try {
+      normalized = RestBackend.normalizeUrl(url);
+    } on FormatException catch (e) {
+      return Future.error(e.message);
+    }
+    var session = _session;
+    bool alive() =>
+        session == _session && identical(loadedDatabase.value, database);
+
+    var target = _RemoteTarget(null, ServerSettings(url: normalized));
+    var newBackend =
+        _buildBackendFromSettings(target, key, httpClient: httpClient)!;
+    var previous = _RemoteTarget.of(database.settings);
+    var moved = !previous.isNone &&
+        (previous.github != null ||
+            _canonicalUrl(previous.server!.url) != normalized);
+    return _configureRemote(
+        database: database,
+        name: name,
+        key: key,
+        target: target,
+        newBackend: newBackend,
+        alive: alive,
+        hadRemote: !previous.isNone,
+        moved: moved,
+        maybeSameFile: false,
+        confirmCreate: confirmCreate,
+        fileMissing: () => ServerFileMissingException());
+  }
+
+  /// Die kanonische Form einer gespeicherten URL für den Vergleich; eine
+  /// nicht prüfbare (fremde) URL bleibt, wie sie ist.
+  static String _canonicalUrl(String url) {
+    try {
+      return RestBackend.normalizeUrl(url);
+    } on FormatException {
+      return url;
+    }
+  }
+
+  /// Der gemeinsame Teil von [configureGithub] und [configureServer]: liest
+  /// die Datei am neuen Ort ([newBackend]), mergt oder legt an, schreibt
+  /// zurück, übernimmt dann Einstellungen ([target]) und Backend und leitet
+  /// bei einem Ortswechsel an den alten Ort weiter. Zu den Regeln siehe
+  /// [configureGithub].
+  ///
+  /// - [hadRemote]: die Datenbank hatte schon einen Sync-Ort (sonst
+  ///   Erstkonfiguration: anlegen ohne Rückfrage).
+  /// - [moved]: ein anderer Ort als vorher (anlegen ohne Rückfrage,
+  ///   Weiterleitung), außer [maybeSameFile] (es kann dieselbe Datei sein).
+  /// - [fileMissing] erzeugt die Ausnahme für "Datei fehlt, nicht bestätigt".
+  Future<GithubSettingsResult> _configureRemote({
+    required UltracipherDatabase database,
+    required String name,
+    required Uint8List key,
+    required _RemoteTarget target,
+    required RemoteBackend newBackend,
+    required bool Function() alive,
+    required bool hadRemote,
+    required bool moved,
+    required bool maybeSameFile,
+    required bool confirmCreate,
+    required RemoteFileMissingException Function() fileMissing,
+  }) async {
+    void requireAlive() {
+      if (!alive()) {
+        throw RemoteBackendException('The database was closed meanwhile; '
+            'the sync settings were not changed');
+      }
+    }
+
+    // Ab hier: Kopie. Die offene Datenbank bleibt unberuehrt, bis das Ziel
+    // den Stand hat.
+    var candidate = UltracipherDatabase.fromJson(database.toJson());
     var created = false;
     try {
       var remote = await newBackend.read(name);
       requireAlive();
       UltracipherDatabase? remoteDatabase;
       if (remote.isEmpty) {
-        if (!(confirmCreate ||
-            previous == null ||
-            (moved && !maybeSameFile))) {
-          throw GithubFileMissingException();
+        if (!(confirmCreate || !hadRemote || (moved && !maybeSameFile))) {
+          throw fileMissing();
         }
         created = true;
       } else {
@@ -1189,9 +1369,16 @@ class UltracipherApp {
         remoteDatabase = _decryptRemote(remote, key);
         candidate.merge(remoteDatabase);
       }
-      if (candidate.settings?.github != newGithub) {
+      // Der ganze Wert zaehlt: auch ein noch gesetztes anderes Feld
+      // (github UND server) muss hier auf null gehen.
+      var current = candidate.settings;
+      if (current == null ||
+          current.github != target.github ||
+          current.server != target.server) {
         candidate.setSettings(
-            github: newGithub, time: _settingsTime(candidate));
+            github: target.github,
+            server: target.server,
+            time: _settingsTime(candidate));
       }
       if (created ||
           remoteDatabase == null ||
@@ -1214,7 +1401,7 @@ class UltracipherApp {
       var stored = _storeSessionCopy(name, data, key);
       _replaceBackend(
           newBackend,
-          newGithub,
+          target,
           database.hasSameContentAs(candidate)
               ? SyncStatus.synced
               : SyncStatus.notSynced);
@@ -1287,41 +1474,41 @@ class UltracipherApp {
       }
       return conflict;
     } catch (e) {
-      print('Writing to the old GitHub location failed (${e.runtimeType})');
+      print('Writing to the old location failed (${e.runtimeType})');
       return e is Exception
           ? e
           : RemoteBackendException('Write failed (${e.runtimeType})');
     }
   }
 
-  /// Entfernt GitHub aus der offenen Datenbank (neues Modell): `github: null`
-  /// mit neuer `time` (explizit, ein Fehlen genügt dem Merge nicht), lokal
-  /// gespeichert, Backend verworfen, Status `noRemote`. Andere Geräte
-  /// erfahren es durch den Merge der Remote-Datei (sie wechseln dann auch auf
-  /// `noRemote`, B4a).
+  /// Entfernt den Sync-Ort (GitHub oder Sync-Server) aus der offenen Datenbank
+  /// (neues Modell): `github: null` und `server: null` mit neuer `time`
+  /// (explizit, ein Fehlen genügt dem Merge nicht), lokal gespeichert, Backend
+  /// verworfen, Status `noRemote`. Andere Geräte erfahren es durch den Merge
+  /// der Remote-Datei (sie wechseln dann auch auf `noRemote`, B4a).
   ///
   /// Damit sie es erfahren, läuft vorher der normale Sync mit `github: null`
   /// (er schreibt an den alten Ort und wechselt dann selbst auf kein Backend,
   /// B4b). Das ist best effort: scheitert er (offline, Token abgelehnt, Datei
-  /// fehlt), wird GitHub trotzdem lokal entfernt (sonst käme man mit einem
+  /// fehlt), wird der Ort trotzdem lokal entfernt (sonst käme man mit einem
   /// widerrufenen Token nie heraus) und [GithubSettingsResult.oldLocationError]
   /// meldet, dass es nicht weitergegeben wurde. Die Remote-Datei bleibt immer
   /// stehen.
   ///
   /// Einstellungen und Backend stimmen am Ende immer überein. Brachte der
-  /// Sync neuere Einstellungen eines Geräts mit vorgehender Uhr mit (GitHub
-  /// ist wieder gesetzt), wird mit der gemergten Zeit erneut entfernt; nach
+  /// Sync neuere Einstellungen eines Geräts mit vorgehender Uhr mit (ein
+  /// Sync-Ort ist wieder gesetzt), wird mit der gemergten Zeit erneut entfernt; nach
   /// drei Runden gibt die Methode mit einem Fehler auf, ohne das Backend zu
   /// verwerfen. Gespeichert wird vor der Änderung im Speicher: scheitert das
   /// lokale Speichern, bleibt alles wie es war.
-  Future<GithubSettingsResult> removeGithub() async {
+  Future<GithubSettingsResult> removeRemote() async {
     var database = loadedDatabase.value;
     var name = _databaseName;
     var key = _root;
     if (database == null || name == null || key == null) {
       return Future.error('No database open');
     }
-    if (database.settings?.github == null && remoteBackend == null) {
+    if (_RemoteTarget.of(database.settings).isNone && remoteBackend == null) {
       return GithubSettingsResult();
     }
     var session = _session;
@@ -1330,7 +1517,8 @@ class UltracipherApp {
     for (var round = 1; round <= 3; round++) {
       // Auf einer Kopie speichern, erst danach die offene Datenbank aendern.
       var candidate = UltracipherDatabase.fromJson(database.toJson());
-      candidate.setSettings(github: null, time: _settingsTime(candidate));
+      candidate.setSettings(
+          github: null, server: null, time: _settingsTime(candidate));
       await _storeSessionCopy(name, encryptDatabase(candidate, key), key);
       if (!alive()) return GithubSettingsResult();
       database.merge(candidate);
@@ -1342,7 +1530,7 @@ class UltracipherApp {
         status = await syncNow();
       }
       if (!alive()) return GithubSettingsResult();
-      if (database.settings?.github != null) {
+      if (!_RemoteTarget.of(database.settings).isNone) {
         // Der Sync-Merge brachte neuere Einstellungen mit: mit der jetzt
         // gemergten Zeit noch einmal.
         continue;
@@ -1351,8 +1539,8 @@ class UltracipherApp {
         return GithubSettingsResult();
       }
       // Der Sync hat das Backend nicht selbst verworfen (er scheiterte):
-      // Einstellungen sagen "kein GitHub", also auch die Sitzung.
-      _replaceBackend(null, null, SyncStatus.noRemote)?.close();
+      // Einstellungen sagen "kein Sync-Ort", also auch die Sitzung.
+      _replaceBackend(null, _RemoteTarget.none, SyncStatus.noRemote)?.close();
       var cause = status.cause;
       return GithubSettingsResult(
           oldLocationError: cause is Exception
@@ -1360,9 +1548,12 @@ class UltracipherApp {
               : RemoteBackendException(
                   status.error ?? 'The sync did not finish (${status.state})'));
     }
-    throw RemoteBackendException('GitHub could not be removed: the settings '
-        'kept coming back from the remote; try again');
+    throw RemoteBackendException('The sync setting could not be removed: the '
+        'settings kept coming back from the remote; try again');
   }
+
+  /// Wie [removeRemote]; der alte Name aus der Zeit, als es nur GitHub gab.
+  Future<GithubSettingsResult> removeGithub() => removeRemote();
 
   // --- Passwortwechsel (Plan Schritt 12, §3.5) --------------
 
@@ -1453,12 +1644,12 @@ class UltracipherApp {
     return _flight.exclusive(() async {
       requireAlive();
       var localTarget = _localTargetOf(newName, newKey, mergeLocal);
-      var github = database.settings?.github;
-      if (github != null && backend == null) {
-        throw RemoteBackendException('GitHub is configured but not connected; '
-            'the passphrase was not changed');
+      var configured = !_RemoteTarget.of(database.settings).isNone;
+      if (configured && backend == null) {
+        throw RemoteBackendException('Syncing is configured but not '
+            'connected; the passphrase was not changed');
       }
-      var remote = github != null;
+      var remote = configured;
 
       // Auf einer Kopie, bis beide neuen Kopien geschrieben sind.
       var candidate = UltracipherDatabase.fromJson(database.toJson());
@@ -1475,7 +1666,9 @@ class UltracipherApp {
         try {
           await backend!.whenWritesSettled().timeout(pendingWriteWait);
         } on TimeoutException {
-          throw RemoteBackendException('An earlier request to GitHub has not '
+          var where =
+              remoteNameInSentence(backend?.displayName ?? 'the remote');
+          throw RemoteBackendException('An earlier request to $where has not '
               'finished yet; the passphrase was not changed. Check the '
               'network and try again in a minute.');
         }
@@ -1715,7 +1908,7 @@ class UltracipherApp {
   }
 
   /// Beginnt die Sitzung für [database]. Das Backend kommt aus
-  /// deren `settings.github` (siehe [_buildBackendFromSettings]); ohne eines
+  /// deren `settings.github` oder `settings.server` (siehe [_buildBackendFromSettings]); ohne eines
   /// ist der Status `noRemote`, sonst `notSynced` (noch kein Sync
   /// abgeschlossen) und der erste Sync läuft an.
   void _startSession(String name, Uint8List key, UltracipherDatabase database,
@@ -1723,14 +1916,14 @@ class UltracipherApp {
     _newSession(SyncStatus.noRemote);
     _restoredFromBackup = restored;
     _databaseName = name;
-    var github = database.settings?.github;
-    var backend = github == null ? null : _buildBackendFromSettings(github, key);
+    var target = _RemoteTarget.of(database.settings);
+    var backend = target.isNone ? null : _buildBackendFromSettings(target, key);
     if (backend != null) {
       syncStatus.value = SyncStatus.notSynced;
     }
     _root = key;
     remoteBackend = backend;
-    _backendGithub = backend == null ? null : github;
+    _backendTarget = backend == null ? _RemoteTarget.none : target;
     loadedDatabase.value = database;
     if (backend != null) {
       requestSync();

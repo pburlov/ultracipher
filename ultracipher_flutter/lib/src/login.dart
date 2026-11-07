@@ -177,7 +177,7 @@ class _LoginScreenState extends State<LoginScreen> {
             padding: EdgeInsets.all(5),
             child: Text(
                 'To connect a second device: choose "New" there and enter the '
-                'same passphrase and the same GitHub access.',
+                'same passphrase and the same GitHub or sync server access.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall)),
         // Nur Altdaten auf dem Geraet (z. B. v2-Kopien): sie lassen sich nie
@@ -248,8 +248,9 @@ class _LoginScreenState extends State<LoginScreen> {
               title: Text('Erase local data?'),
               content: Text('All databases stored on this device are removed, '
                   'together with their cached keys. Changes that are not '
-                  'synced yet, and databases that are not on GitHub, are '
-                  'lost for good. Data on GitHub is not touched.'),
+                  'synced yet, and databases that are not on GitHub or a sync '
+                  'server, are lost for good. Data on GitHub or the sync '
+                  'server is not touched.'),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.of(context).pop(false),

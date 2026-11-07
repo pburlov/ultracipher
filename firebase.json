@@ -1,0 +1,29 @@
+{
+  "hosting": {
+    "public": "ultracipher_flutter/build/web",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/ucdb/**",
+        "function": { "functionId": "ucdb", "region": "europe-west1" }
+      },
+      { "source": "**", "destination": "/index.html" }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          { "key": "Content-Security-Policy", "value": "frame-ancestors 'none'" },
+          { "key": "X-Frame-Options", "value": "DENY" }
+        ]
+      }
+    ]
+  },
+  "functions": [
+    {
+      "source": "server/firebase/functions",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "*.test.js"]
+    }
+  ]
+}

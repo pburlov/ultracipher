@@ -11,7 +11,8 @@ import 'package:ultracipher_flutter/src/core.dart';
 import 'package:ultracipher_flutter/src/view_entry.dart';
 
 import 'commons.dart';
-import 'github_settings.dart';
+import 'sync_choice.dart';
+import 'backend/remote_backend.dart' show remoteNameInSentence;
 import 'progess_screen.dart';
 import 'sync.dart';
 import 'sync_status_button.dart';
@@ -63,7 +64,7 @@ enum _MenuAction {
   importCsv,
   exportEncrypted,
   changePassphrase,
-  githubSettings,
+  syncServer,
   syncNow,
   removeLocal,
 }
@@ -212,7 +213,7 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     _maybeShowSyncProblem(status);
   }
 
-  /// SnackBar mit "GitHub settings", wenn ein Sync in `authRequired` oder
+  /// SnackBar mit "Sync server" (die Einstellungen), wenn ein Sync in `authRequired` oder
   /// `remoteMissing` endet (Plan §3.4). Einmal je (Zustand, Fehlertext), bis
   /// der Zustand die Fehlerzustände verlässt; [force] zeigt sie trotzdem
   /// (nach dem Schließen der Einstellungen, die sie weggenommen haben).
@@ -220,12 +221,12 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     String text;
     switch (status.state) {
       case SyncState.authRequired:
-        text = 'GitHub rejected the access token. Enter it again in '
-            'GitHub settings.';
+        text = 'GitHub rejected the access token. Enter it again under '
+            '"Sync server" > GitHub.';
         break;
       case SyncState.remoteMissing:
         text = '${syncStatusText(status)} Use "Change passphrase" with the '
-            'new passphrase, or open GitHub settings.';
+            'new passphrase, or open the sync server settings.';
         break;
       case SyncState.syncing:
         // Ein Lauf dazwischen schärft die SnackBar nicht neu.
@@ -244,7 +245,7 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
       content: Text(text),
       duration: const Duration(seconds: 12),
       action: SnackBarAction(
-          label: 'GitHub settings', onPressed: _openGithubSettings),
+          label: 'Sync server', onPressed: _openSyncSettings),
     ));
   }
 
@@ -275,8 +276,8 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
                   value: _MenuAction.changePassphrase,
                   child: Text('Change passphrase')),
               PopupMenuItem(
-                  value: _MenuAction.githubSettings,
-                  child: Text('GitHub settings')),
+                  value: _MenuAction.syncServer,
+                  child: Text('Sync server')),
               PopupMenuItem(
                   value: _MenuAction.syncNow, child: Text('Sync now')),
               PopupMenuItem(
@@ -297,8 +298,8 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
                 case _MenuAction.changePassphrase:
                   _changePassphrase();
                   break;
-                case _MenuAction.githubSettings:
-                  _openGithubSettings();
+                case _MenuAction.syncServer:
+                  _openSyncSettings();
                   break;
                 case _MenuAction.syncNow:
                   _syncNow();
@@ -379,9 +380,9 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(SnackBar(
       content: Text('This database is only stored on this device. Set up '
-          'GitHub to sync it.'),
+          'GitHub or a sync server to sync it.'),
       action: SnackBarAction(
-          label: 'GitHub settings', onPressed: _openGithubSettings),
+          label: 'Sync server', onPressed: _openSyncSettings),
     ));
   }
 
@@ -456,11 +457,13 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     var check = await _checkSync();
     if (!mounted) return;
     String message;
+    var where = remoteNameInSentence(
+        UltracipherApp.instance.remoteBackend?.displayName ?? 'the remote');
     switch (check) {
       case _SyncCheck.synced:
         message = 'The copy on this device is deleted. The database is '
-            'synced, so it stays on GitHub; you can load it again with '
-            '"New" (same passphrase and GitHub access).';
+            'synced, so it stays on $where; you can load it again with '
+            '"New" (same passphrase and access to $where).';
         break;
       case _SyncCheck.noRemote:
         message = 'This database exists only on this device (no remote). '
@@ -469,11 +472,11 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
         break;
       case _SyncCheck.unsynced:
         message = 'This database has unsynced changes that are not on '
-            'GitHub yet. Removing the local copy loses them.${_reasonSuffix()}';
+            '$where yet. Removing the local copy loses them.${_reasonSuffix()}';
         break;
       case _SyncCheck.unknown:
         message = 'Sync status unknown: it could not be checked whether '
-            'everything is on GitHub. Removing the local copy may lose '
+            'everything is on $where. Removing the local copy may lose '
             'changes.${_reasonSuffix()}';
         break;
     }
@@ -511,9 +514,9 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
     }
   }
 
-  /// GitHub-Einstellungen (modal). Die Datenbank muss offen bleiben; das
+  /// Einstellungen des Sync-Orts (modal, erst die Auswahl). Die Datenbank muss offen bleiben; das
   /// Ergebnis ist nur ein Hinweis zum Aktualisieren.
-  Future<void> _openGithubSettings() async {
+  Future<void> _openSyncSettings() async {
     if (_settingsOpen || !mounted) return;
     _settingsOpen = true;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -521,7 +524,7 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
       await Navigator.push<bool>(
           context,
           MaterialPageRoute(
-              builder: (context) => const GithubSettingsScreen()));
+              builder: (context) => const SyncChoiceScreen()));
     } finally {
       _settingsOpen = false;
     }
@@ -680,8 +683,16 @@ class _DatabaseLoadedScreenState extends State<DatabaseLoadedScreen>
           text: base64.encode(bytes),
           containsToken:
               UltracipherApp.instance.loadedDatabase.value?.settings?.github !=
-                  null),
+                  null,
+          containsServerUrl: _exportHasServerUrl()),
     );
+  }
+
+  /// Der Export trägt die Adresse des Sync-Servers mit (nur, wenn GitHub nicht
+  /// gilt; bei beiden gesetzt gilt GitHub, siehe `containsToken`).
+  bool _exportHasServerUrl() {
+    var settings = UltracipherApp.instance.loadedDatabase.value?.settings;
+    return settings?.activeServer != null;
   }
 
   void _showMessage(String message) {
@@ -699,8 +710,16 @@ class _EncryptedTextExportDialog extends StatefulWidget {
   /// (verschlüsselt) mit (Plan §3.2).
   final bool containsToken;
 
+  /// Die Datenbank enthält die Adresse des Sync-Servers (verschlüsselt). Sie
+  /// ist kein Passwort, aber wer sie und den Namen kennt, kann die Kopie auf
+  /// dem Server überschreiben.
+  final bool containsServerUrl;
+
   const _EncryptedTextExportDialog(
-      {Key? key, required this.text, this.containsToken = false})
+      {Key? key,
+      required this.text,
+      this.containsToken = false,
+      this.containsServerUrl = false})
       : super(key: key);
 
   @override
@@ -744,6 +763,15 @@ class _EncryptedTextExportDialogState
                     'The text includes the GitHub access token (encrypted). '
                     'Whoever has the text and the passphrase can also write '
                     'to your repository.',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ),
+            if (widget.containsServerUrl)
+              Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                    'The text includes the address of your sync server '
+                    '(encrypted). Whoever has the text and the passphrase '
+                    'knows where your server copy is.',
                     style: Theme.of(context).textTheme.bodySmall),
               ),
             TextField(

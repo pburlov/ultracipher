@@ -1068,7 +1068,8 @@ void main() {
 
     test('the message names the timeout in seconds when it is a whole number',
         () {
-      expect(RemoteTimeoutException(GithubBackend.defaultRequestTimeout).message,
+      expect(RemoteTimeoutException(GithubBackend.defaultRequestTimeout, 'GitHub')
+          .message,
           'GitHub did not respond within 30 s. Check the network and try '
           'again.');
     });

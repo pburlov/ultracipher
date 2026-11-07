@@ -24,7 +24,9 @@ import 'package:ultracipher_flutter/src/github_settings.dart';
 import 'package:ultracipher_flutter/src/local_store/local_store.dart';
 import 'package:ultracipher_flutter/src/login.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
+import 'package:ultracipher_flutter/src/server_settings.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
+import 'package:ultracipher_flutter/src/sync_choice.dart';
 import 'package:ultracipher_flutter/src/sync_status_button.dart';
 import 'package:ultracipher_flutter/src/view_entry.dart';
 
@@ -330,7 +332,7 @@ void main() {
         'Import CSV',
         'Export encrypted (base64)',
         'Change passphrase',
-        'GitHub settings',
+        'Sync server',
         'Sync now',
         'Remove local database',
       ]) {
@@ -346,13 +348,32 @@ void main() {
       await _pumpUntil(tester, () => remote.readCount > reads);
     });
 
-    testWidgets('GitHub settings opens the settings screen', (tester) async {
+    testWidgets('Sync server opens the choice; GitHub opens the GitHub screen',
+        (tester) async {
       await _seed(tester, remote: remote);
       await _openAndSync(tester);
-      await _menu(tester, 'GitHub settings');
+      await _menu(tester, 'Sync server');
+      await tester.pumpAndSettle();
+      expect(find.byType(SyncChoiceScreen), findsOneWidget);
+      expect(find.text('None (only this device)'), findsOneWidget);
+      expect(find.text('GitHub'), findsOneWidget);
+      expect(find.text('Sync server (REST)'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('choiceGithub')));
       await tester.pumpAndSettle();
       expect(find.byType(GithubSettingsScreen), findsOneWidget);
       expect(find.text('Remove GitHub'), findsOneWidget);
+    });
+
+    testWidgets('the choice opens the sync server screen', (tester) async {
+      await _seed(tester, remote: remote);
+      await _openAndSync(tester);
+      await _menu(tester, 'Sync server');
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('choiceServer')));
+      await tester.pumpAndSettle();
+      expect(find.byType(ServerSettingsScreen), findsOneWidget);
+      expect(find.byKey(const Key('serverUrlField')), findsOneWidget);
+      expect(find.text('Remove sync server'), findsNothing);
     });
 
     testWidgets('Import CSV warns about deletions made elsewhere (S2)',
@@ -626,7 +647,7 @@ void main() {
   });
 
   group('SnackBar on sync problems', () {
-    testWidgets('authRequired: names GitHub settings and opens them',
+    testWidgets('authRequired: names the sync server settings and opens them',
         (tester) async {
       await _seed(tester, remote: remote);
       remote.readFailure = RemoteAuthException('bad token', statusCode: 401);
@@ -640,9 +661,9 @@ void main() {
           findsOneWidget);
       // Let the SnackBar slide in before tapping its action.
       await tester.pump(const Duration(seconds: 1));
-      await tester.tap(find.widgetWithText(SnackBarAction, 'GitHub settings'));
+      await tester.tap(find.widgetWithText(SnackBarAction, 'Sync server'));
       await tester.pumpAndSettle();
-      expect(find.byType(GithubSettingsScreen), findsOneWidget);
+      expect(find.byType(SyncChoiceScreen), findsOneWidget);
     });
 
     testWidgets('remoteMissing: also names Change passphrase',
@@ -657,7 +678,7 @@ void main() {
       expect(find.textContaining('no longer found on GitHub'),
           findsOneWidget);
       expect(find.textContaining('Change passphrase'), findsOneWidget);
-      expect(find.widgetWithText(SnackBarAction, 'GitHub settings'),
+      expect(find.widgetWithText(SnackBarAction, 'Sync server'),
           findsOneWidget);
     });
 
@@ -763,14 +784,14 @@ void main() {
       // and needs a further frame before it animates in.
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
-      await tester.tap(find.widgetWithText(SnackBarAction, 'GitHub settings'));
+      await tester.tap(find.widgetWithText(SnackBarAction, 'Sync server'));
       await tester.pumpAndSettle();
-      expect(find.byType(GithubSettingsScreen), findsOneWidget);
+      expect(find.byType(SyncChoiceScreen), findsOneWidget);
       expect(find.byType(SnackBar), findsNothing);
 
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pageBack();
       await tester.pumpAndSettle();
-      expect(find.byType(GithubSettingsScreen), findsNothing);
+      expect(find.byType(SyncChoiceScreen), findsNothing);
       expect(find.byType(SnackBar), findsOneWidget);
     });
 
@@ -1069,7 +1090,9 @@ void main() {
       await tester.runAsync(() => _app.removeGithub());
       expect(_app.loadedDatabase.value!.settings!.github, isNull);
 
-      await _menu(tester, 'GitHub settings');
+      await _menu(tester, 'Sync server');
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('choiceGithub')));
       await tester.pumpAndSettle();
       expect(find.text('Remove GitHub'), findsNothing);
       await tester.enterText(

@@ -35,8 +35,9 @@ class RemoteConflictException extends RemoteBackendException {
 }
 
 /// The credential used to talk to the backend was rejected (expired or
-/// revoked). The sync reports `authRequired`; the user re-enters the token in
-/// "GitHub settings".
+/// revoked). Only GitHub raises it; the sync server has no credential. The
+/// sync reports `authRequired`; the user re-enters the token in "GitHub
+/// settings".
 class RemoteAuthException extends RemoteBackendException {
   RemoteAuthException(String message, {int? statusCode})
       : super(message, statusCode: statusCode);
@@ -56,12 +57,14 @@ class RemoteRateLimitException extends RemoteBackendException {
 
 /// The backend did not answer in time and the request was aborted. The
 /// message is meant for the user (it reaches the sync status and the error
-/// dialogs unchanged) and names neither token, owner nor repository.
+/// dialogs unchanged) and names neither token, owner, repository nor URL;
+/// [backendName] is the backend's [RemoteBackend.displayName] ("GitHub",
+/// "Sync server").
 class RemoteTimeoutException extends RemoteBackendException {
   final Duration timeout;
 
-  RemoteTimeoutException(this.timeout)
-      : super('GitHub did not respond within ${_describe(timeout)}. '
+  RemoteTimeoutException(this.timeout, String backendName)
+      : super('$backendName did not respond within ${_describe(timeout)}. '
             'Check the network and try again.');
 
   static String _describe(Duration d) => d.inMilliseconds % 1000 == 0
@@ -69,9 +72,17 @@ class RemoteTimeoutException extends RemoteBackendException {
       : '${d.inMilliseconds} ms';
 }
 
-/// A place to persist and retrieve the encrypted database. Implementation:
-/// [GithubBackend]. The seam stays so the storage can be swapped (and faked
-/// in tests).
+/// [RemoteBackend.displayName] des Sync-Servers ([RestBackend]).
+const String syncServerDisplayName = 'Sync server';
+
+/// Der Name eines Backends mitten im Satz: [RemoteBackend.displayName]
+/// "Sync server" heißt dort "the sync server", "GitHub" bleibt "GitHub".
+String remoteNameInSentence(String displayName) =>
+    displayName == syncServerDisplayName ? 'the sync server' : displayName;
+
+/// A place to persist and retrieve the encrypted database. Implementations:
+/// [GithubBackend] and [RestBackend] (own sync server). The seam also lets
+/// tests fake the storage.
 abstract class RemoteBackend {
   /// Stable identifier, e.g. `'github'`.
   String get id;

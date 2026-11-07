@@ -25,6 +25,7 @@ import 'package:ultracipher_flutter/src/login.dart';
 import 'package:ultracipher_flutter/src/model/model.dart';
 import 'package:ultracipher_flutter/src/progess_screen.dart';
 import 'package:ultracipher_flutter/src/sync.dart';
+import 'package:ultracipher_flutter/src/sync_choice.dart';
 import 'package:ultracipher_flutter/src/view_entry.dart';
 
 import 'fake_local_store.dart';
@@ -254,7 +255,7 @@ void main() {
   });
 
   group('New', () {
-    testWidgets('creates a database, skips GitHub and opens it',
+    testWidgets('creates a database, skips syncing and opens it',
         (tester) async {
       await _pumpApp(tester);
 
@@ -277,12 +278,21 @@ void main() {
       await tester.pump();
       expect(find.text('Deriving key...'), findsOneWidget);
       await _pumpUntil(
-          tester, () => find.text('GitHub token').evaluate().isNotEmpty);
+          tester, () => find.byType(SyncChoiceScreen).evaluate().isNotEmpty);
       await tester.pump(const Duration(milliseconds: 300));
 
-      // The database is already open under the settings screen.
+      // The database is already open under the choice screen: GitHub, own
+      // sync server or Skip (no "None": skipping is the same).
       expect(_app.loadedDatabase.value, isNotNull);
       expect(_app.localDatabaseNames(), hasLength(1));
+      expect(find.byType(SyncChoiceScreen), findsOneWidget);
+      expect(find.text('GitHub'), findsOneWidget);
+      expect(find.text('Sync server (REST)'), findsOneWidget);
+      expect(find.text('None (only this device)'), findsNothing);
+      expect(find.byKey(const Key('choiceSkip')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('choiceGithub')));
+      await tester.pumpAndSettle();
       expect(find.byType(GithubSettingsScreen), findsOneWidget);
       var token = tester.widget<TextField>(_field('GitHub token'));
       expect(token.obscureText, isTrue);
@@ -296,11 +306,17 @@ void main() {
       expect(find.text("Empty: the repository's default branch"),
           findsOneWidget);
 
+      // Skip on the GitHub screen goes back to the choice, Skip there ends it.
       await tester.tap(find.widgetWithText(TextButton, 'Skip'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SyncChoiceScreen), findsOneWidget);
+      expect(find.byType(GithubSettingsScreen), findsNothing);
+
+      await tester.tap(find.byKey(const Key('choiceSkip')));
       await tester.pumpAndSettle();
 
       expect(find.byType(DatabaseLoadedScreen), findsOneWidget);
-      expect(find.byType(GithubSettingsScreen), findsNothing);
+      expect(find.byType(SyncChoiceScreen), findsNothing);
       expect(_app.syncStatus.value.state, SyncState.noRemote);
       expect(_app.loadedDatabase.value!.settings?.github, isNull);
     });
@@ -900,7 +916,7 @@ void main() {
           find.descendant(of: dialog, matching: find.text('Continue')));
       await tester.pump();
       await _pumpUntil(
-          tester, () => find.text('GitHub token').evaluate().isNotEmpty);
+          tester, () => find.byType(SyncChoiceScreen).evaluate().isNotEmpty);
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(_app.loadedDatabase.value, isNotNull);
@@ -920,7 +936,7 @@ void main() {
       expect(warning, findsNothing);
       expect(find.text('Deriving key...'), findsOneWidget);
       await _pumpUntil(
-          tester, () => find.text('GitHub token').evaluate().isNotEmpty);
+          tester, () => find.byType(SyncChoiceScreen).evaluate().isNotEmpty);
       await tester.pump(const Duration(milliseconds: 300));
     });
 
