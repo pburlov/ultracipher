@@ -4,7 +4,7 @@
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {
-        "source": "/ucdb/**",
+        "source": "/ucdb*/**",
         "function": { "functionId": "ucdb", "region": "europe-west1" }
       },
       { "source": "**", "destination": "/index.html" }

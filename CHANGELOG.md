@@ -6,6 +6,29 @@ repository has no tags.
 
 ## [Unreleased]
 
+### Sync server abuse protection
+
+- The Firebase sync function (`server/firebase/functions`) is protected
+  against abuse without a login. A `PUT` body must look like an Ultracipher
+  format v1 file (header fields and length arithmetic, otherwise `400`). The
+  function only answers `/<prefix>/<name>` with a configurable secret prefix
+  (`UCDB_PREFIX`, default `ucdb`, must start with `ucdb`); the Hosting rewrite
+  is now `/ucdb*/**`. Rate limits are kept in memory per instance: creating
+  files per day (global), writes and read volume per database name. A cap on
+  the number of files in the bucket (`UCDB_MAX_FILES`, default 20) answers
+  creation with `507` when reached. Settings come from `process.env.UCDB_*`,
+  set per project in the uncommitted `server/firebase/functions/.env.<project-id>`
+  (template `.env.example`). Described in `docs/self-hosting.md`, "Abuse limits
+  and a secret path".
+- Breaking change: the function no longer accepts the bare path `/<name>`.
+  Setups that entered the function's own address (`.../cloudfunctions.net/ucdb`
+  or the `run.app` address) must append `/ucdb` or their prefix to the URL in
+  the sync server settings of every device.
+- The GitHub workflow that deployed the Firebase project
+  (`.github/workflows/firebase.yml`, Workload Identity Federation, repository
+  variables) is removed. Everyone deploys from their own machine with the
+  Firebase CLI; the guide is rewritten accordingly.
+
 ### Android build
 
 - The Android project is migrated to declarative Gradle plugins

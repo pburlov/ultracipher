@@ -6,12 +6,18 @@
 const { onRequest } = require('firebase-functions/v2/https');
 const { initializeApp } = require('firebase-admin/app');
 const { getStorage } = require('firebase-admin/storage');
-const { createHandler } = require('./handler');
+const { createHandler, optionsFromEnv } = require('./handler');
 
 initializeApp();
 
 // Erst beim ersten Aufruf: der Default-Bucket kommt aus der Laufzeit-
 // Konfiguration, beim Deploy (Code-Analyse) ist sie nicht gesetzt.
+//
+// Einstellungen (Pfadpraefix, Limits) kommen aus `process.env.UCDB_*`; die
+// Firebase-CLI deployt die Werte aus `.env.<projekt-id>` als Umgebung der
+// Funktion. Bewusst keine defineString/defineInt-Parameter: ein Parameter ohne
+// Wert in der dotenv-Datei laesst `firebase deploy --non-interactive` auch mit
+// Default scheitern (firebase-tools params.js, resolveParams).
 let handler;
 
 exports.ucdb = onRequest(
@@ -27,7 +33,7 @@ exports.ucdb = onRequest(
     invoker: 'public',
   },
   (req, res) => {
-    handler = handler || createHandler(getStorage().bucket());
+    handler = handler || createHandler(getStorage().bucket(), optionsFromEnv(process.env));
     return handler(req, res);
   },
 );

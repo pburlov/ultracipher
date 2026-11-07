@@ -106,11 +106,11 @@ frame-ancestors 'none'` (or `X-Frame-Options: DENY`). The Firebase Hosting setup
 Instead of GitHub Pages you can serve the web version from Firebase Hosting
 together with the optional sync server (a Cloud Function in
 [`server/firebase/`](server/firebase/)) in your own Firebase project. Both then
-share one origin, so the CSP stays as it is. The workflow
-[`.github/workflows/firebase.yml`](.github/workflows/firebase.yml) deploys it
-from your fork, again only with repository variables and no code change. The
-steps, the sync server protocol (for implementations on other platforms) and the
-security notes are in [docs/self-hosting.md](docs/self-hosting.md).
+share one origin, so the CSP stays as it is. You deploy it yourself from your
+own machine with the Firebase CLI, with no code change (there is no deploy
+workflow). The steps, the sync server protocol (for implementations on other
+platforms), the abuse limits and the security notes are in
+[docs/self-hosting.md](docs/self-hosting.md).
 
 ### Limitations of the web version
 

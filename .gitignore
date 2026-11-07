@@ -22,3 +22,8 @@ build/
 .firebase/
 firebase-debug.log
 node_modules/
+
+# Sync-Server (Firebase): Konfiguration pro Projekt (`.env.<projekt-id>`, enthaelt
+# den geheimen Pfadpraefix); nur die Vorlage wird eingecheckt
+server/firebase/functions/.env*
+!server/firebase/functions/.env.example
