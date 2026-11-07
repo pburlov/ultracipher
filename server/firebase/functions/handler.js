@@ -72,6 +72,19 @@ function generationAfterSave(file) {
 function createHandler(bucket, options = {}) {
   const log = options.log || ((...args) => console.error(...args));
 
+  // Die Speicher-Bibliothek meldet fuer ein fehlendes Objekt und fuer einen
+  // fehlenden Bucket beide 404. Nur im 404-Fall gefragt (einmal, kein Mehr-
+  // aufwand im Normalfall): fehlt der Bucket, ist das ein Serverfehler (500,
+  // Log ohne Namen), kein "Datei fehlt". Wirft exists() selbst, wird daraus
+  // der uebliche 500 des Handlers.
+  async function bucketMissing(res, method) {
+    const [exists] = await bucket.exists();
+    if (exists) return false;
+    log('ucdb', method, 'bucket-missing');
+    send(res, 500);
+    return true;
+  }
+
   async function get(res, path) {
     for (let attempt = 0; attempt < GET_ATTEMPTS; attempt++) {
       let generation;
@@ -79,8 +92,9 @@ function createHandler(bucket, options = {}) {
         const [meta] = await bucket.file(path).getMetadata();
         generation = String(meta.generation);
       } catch (e) {
-        if (Number(e && e.code) === 404) return send(res, 404);
-        throw e;
+        if (Number(e && e.code) !== 404) throw e;
+        if (await bucketMissing(res, 'GET')) return;
+        return send(res, 404);
       }
       try {
         // Die Generation steckt im File-Objekt: download() selbst nimmt keine
@@ -150,7 +164,15 @@ function createHandler(bucket, options = {}) {
     if (ifMatch === undefined) return send(res, 428);
     const generation = parseEtag(ifMatch);
     if (generation === null) return send(res, 412);
-    await bucket.file(path).delete({ ifGenerationMatch: generation });
+    try {
+      await bucket.file(path).delete({ ifGenerationMatch: generation });
+    } catch (e) {
+      if (Number(e && e.code) !== 404) throw e;
+      // Datei fehlt: fuer den Client ein Versionskonflikt; fehlt der Bucket,
+      // ein Serverfehler.
+      if (await bucketMissing(res, 'DELETE')) return;
+      return send(res, 412);
+    }
     return send(res, 204);
   }
 
@@ -178,10 +200,9 @@ function createHandler(bucket, options = {}) {
     } catch (e) {
       const code = Number(e && e.code);
       if (code === 412) return send(res, 412);
-      // Datei fehlt bei DELETE: fuer den Client ein Versionskonflikt. Bei PUT
-      // und GET kommt ein 404 aus dem Speicher nur, wenn z. B. der Bucket fehlt
-      // (PUT mit Bedingung liefert 412): das ist ein Serverfehler (500).
-      if (code === 404 && req.method === 'DELETE') return send(res, 412);
+      // Ein 404 aus dem Speicher bei PUT kommt nur, wenn z. B. der Bucket fehlt
+      // (PUT mit Bedingung liefert 412): das ist ein Serverfehler (500). GET
+      // und DELETE behandeln ihr 404 selbst (siehe bucketMissing).
       // Nie Name, Pfad, Inhalt oder die Fehlermeldung loggen (kann den Pfad
       // enthalten), nur Methode und Code.
       log('ucdb', req.method, Number.isFinite(code) ? code : 'error');

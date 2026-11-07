@@ -11,17 +11,19 @@ The server only ever stores the encrypted file (the same bytes the GitHub file `
 3. [Set up the deploy access (Workload Identity Federation)](#2-set-up-the-deploy-access-workload-identity-federation)
 4. [Set the repository variables and deploy](#3-set-the-repository-variables-and-deploy)
 5. [Use it in the app](#4-use-it-in-the-app)
-6. [Updating your fork](#updating-your-fork)
-7. [Variant: the function only, without Hosting](#variant-the-function-only-without-hosting)
-8. [The protocol](#the-protocol-for-your-own-implementation)
-9. [Security notes](#security-notes)
-10. [Items to verify](#items-to-verify)
+6. [Alternative: deploying from your own machine](#deploying-from-your-own-machine)
+7. [Updating your fork](#updating-your-fork)
+8. [Variant: the function only, without Hosting](#variant-the-function-only-without-hosting)
+9. [The protocol](#the-protocol-for-your-own-implementation)
+10. [Security notes](#security-notes)
+11. [Items to verify](#items-to-verify)
 
 ## The fork model
 
 - `ultracipher` (upstream) contains everything: the app, the function, [`firebase.json`](../firebase.json) and the workflow [`.github/workflows/firebase.yml`](../.github/workflows/firebase.yml). The workflow does nothing unless the repository variable `DEPLOY_FIREBASE` is `true`, and it never runs for pull requests.
 - You fork the repository (or push a copy to a repository of your own) and **change no code**. Everything that is yours lives in repository variables: your Firebase project ID and your deploy access. Because the fork has no changes of its own, it can be brought up to date without merge conflicts (see [Updating your fork](#updating-your-fork)).
 - There are no repository secrets and no long-lived keys. The workflow signs in to Google Cloud with a short-lived token that GitHub issues for the run (Workload Identity Federation).
+- The workflow is one of two equal ways to deploy. If you are the only user and do not want a fork, a deploy access and repository variables, deploy from your own machine with the Firebase CLI instead ([Deploying from your own machine](#deploying-from-your-own-machine)); `DEPLOY_FIREBASE` then stays unset. Steps 2 and 3 are only for the workflow.
 - The Pages workflow (`pages.yml`, variable `DEPLOY_PAGES`) stays as it is, for forks that do not use Firebase (the web app then supports GitHub sync only, or a self-built function host, see [the variant below](#variant-the-function-only-without-hosting)).
 
 ## 1. Create the Firebase project
@@ -40,7 +42,10 @@ The server only ever stores the encrypted file (the same bytes the GitHub file `
    ```
 
    A budget only sends a notification; it does not stop spending. The function additionally limits itself: at most 2 instances, 16 MiB per file, 60 s per request.
-4. Create the default Cloud Storage bucket: Firebase console, Build, Storage, Get started. Choose **production mode** (locked security rules). The function reaches the bucket with its own service account and does not depend on the rules, so leave them closed: the deploy does not touch Storage rules, and "test mode" rules would open the bucket to everyone. The function stores the files as `ucdb/<name>` in this default bucket. Choose the bucket location with care, it cannot be changed later. Create the bucket **before the first deploy**: the function takes the default bucket name from the project configuration that the deploy provides (verify); if you add Storage later, deploy again.
+4. Create the default Cloud Storage bucket: Firebase console, Build, Storage, **Get started**. Choose **production mode** (locked security rules). The function reaches the bucket with its own service account and does not depend on the rules, so leave them closed: the deploy does not touch Storage rules, and "test mode" rules would open the bucket to everyone. The function stores the files as `ucdb/<name>` in this default bucket.
+   - **Do this even if the project already has a bucket.** Old Google Cloud or App Engine projects often have a `<project-id>.appspot.com` bucket. Firebase does not use it: it hands the function `<project-id>.firebasestorage.app` as the default bucket (you can check the value with the Firebase Management API, `GET https://firebasemanagement.googleapis.com/v1beta1/projects/<project-id>/adminSdkConfig`, field `storageBucket`). Until "Get started" has created that bucket, the bucket does not exist, `PUT` fails with `500`, and the function answers `GET` with `500` and the log line `ucdb GET bucket-missing` (an older version of the function answered `404`, which the app shows as "remote file missing").
+   - Choose the bucket location with care, it cannot be changed later. The function runs in `europe-west1`; the best choice is the same region. The free tier for new buckets applies only to US regions; for the amount of data of a password database, any other region costs a few cents.
+   - You do not need to deploy again after creating the bucket (observed): the function reads the bucket name from its configuration and finds the bucket on the next request.
 5. Optional: enable Hosting in the console (Build, Hosting, Get started; the console wizard can be skipped, the deploy creates the site). The web app is then served at `https://<project-id>.web.app/` and `https://<project-id>.firebaseapp.com/`. A custom domain can be added in the console.
 
 Enable the APIs the deploy uses (the deploy tries to enable missing ones itself, which needs more permissions than the deploy access below gets):
@@ -140,6 +145,39 @@ https://<project-id>.web.app/ucdb
 
 with no trailing slash. The native apps and the web app use the same URL. The URL is stored encrypted inside the database and travels to your other devices with the sync, like the GitHub settings.
 
+## Deploying from your own machine
+
+This is an equal and simpler alternative to the GitHub workflow, for example for a single person: no fork, no Workload Identity Federation, no repository variables. Skip steps 2 and 3 above (do step 1 and use the app as in step 4). `DEPLOY_FIREBASE` stays unset, so the workflow does nothing.
+
+Prerequisites:
+
+- Flutter in the version that `.github/workflows/pages.yml` pins (`flutter-version`, currently 3.47.8), for the web build.
+- Node 22 (the function's runtime; `engines` in `server/firebase/functions/package.json`).
+- The Firebase CLI (`firebase-tools`; the workflow uses `15.35.0`, for example `npm install -g firebase-tools@15.35.0`), and `firebase login` once. The account needs deploy rights in the project (Owner or Editor is enough for your own project).
+
+From the repository root:
+
+```bash
+cd ultracipher_flutter && flutter pub get && flutter build web --wasm --no-web-resources-cdn --base-href "/" && cd ..
+cd server/firebase/functions && npm ci && cd ../../..
+firebase deploy --only hosting,functions --project <project-id>
+```
+
+[`firebase.json`](../firebase.json) is read from the repository root and expects the build in `ultracipher_flutter/build/web`. The first deploy can end with an error about the cleanup policy; see below.
+
+### First deploy: the cleanup policy
+
+The first functions deploy of a project ends with the error `Functions successfully deployed but could not set up cleanup policy`, although the function **is** deployed. The Firebase CLI wants a policy that deletes old container images (otherwise images pile up and cost a small monthly amount) and cannot ask for it in a non-interactive run. Because the deploy stops there, Hosting may not have been published. Set the policy once, and finish Hosting if needed:
+
+```bash
+firebase functions:artifacts:setpolicy --project <project-id> --location europe-west1   # deletes images older than 1 day
+firebase deploy --only hosting --project <project-id>
+```
+
+Later deploys do not ask again. In an interactive run (the commands above, in a terminal) the CLI asks for the number of days instead; `--force` accepts the default (1 day) without asking.
+
+The GitHub workflow runs `firebase deploy --non-interactive` without `--force`, so its first run in a new project ends the same way: the step fails (the run is red) after the function was deployed, and Hosting may not have been published. Run the `setpolicy` command once (it needs a login with rights on Artifact Registry, for example your own) and start the workflow again; from then on it is green.
+
 ## Updating your fork
 
 Your fork contains no changes of its own, so updating is a fast-forward.
@@ -167,7 +205,7 @@ npx firebase-tools@15.35.0 login
 npx firebase-tools@15.35.0 deploy --only functions --project your-project-id
 ```
 
-The URL for the app is then the function's own address, which the deploy prints: either `https://europe-west1-<project-id>.cloudfunctions.net/ucdb` or `https://ucdb-<hash>-ew.a.run.app` (verify which forms your deploy gives you; the function itself sits at the root of its address, so the second form has no `/ucdb` suffix). Enter it under "Sync server" without a trailing slash; the function accepts `/<name>` directly.
+The URL for the app is then the function's own address, which the deploy prints: either `https://europe-west1-<project-id>.cloudfunctions.net/ucdb` or `https://ucdb-<hash>-ew.a.run.app` (both observed; the function itself sits at the root of its address, so the second form has no `/ucdb` suffix). Enter it under "Sync server" without a trailing slash; the function accepts `/<name>` directly.
 
 For the **web** app the page's Content-Security-Policy must allow this host. Add it to `connect-src` in [`ultracipher_flutter/web/index.html`](../ultracipher_flutter/web/index.html), for example:
 
@@ -227,11 +265,14 @@ The server has **no authentication**, by design: the only configuration in the a
 
 ## Items to verify
 
-These points could not be checked while writing this document; check them against the current Firebase and Google Cloud documentation before relying on them.
+Confirmed on 2026-11-07 against a real deploy (Firebase CLI 15.35.0, 2nd-generation function in `europe-west1`, Hosting rewrite `/ucdb/**`):
 
-- **Request body limit through a Hosting rewrite.** The function accepts 16 MiB. Called directly, the request body is limited by Cloud Run to 32 MiB (documented, verify the current value); the Functions Framework in the function's runtime sets its own limit far above that (1 GiB in `@google-cloud/functions-framework` 5.0.5, which is not what limits you). Whether Firebase Hosting rewrites to Cloud Functions/Cloud Run pass bodies of that size unchanged is not confirmed; if they do not, large databases fail to sync with a status such as `413` while small ones work. Test with a database near the size you expect, or use the function's own address (variant above).
-- **Header forwarding through Hosting.** That `If-Match`, `If-None-Match` and `ETag` pass through the rewrite unchanged (and that the response is not cached) is expected, but not confirmed. A quick check with the `curl` examples above against `https://<project-id>.web.app/ucdb` shows it.
-- **Least-privilege deploy roles.** The role list in step 2 is broad. The minimum set (in particular for the Artifact Registry cleanup policy that the Firebase CLI sets up on the first functions deploy in a non-interactive run, and for the source bucket) is not verified.
-- **Billing and free tier.** Which Cloud Storage, Cloud Functions and Hosting usage stays free, and whether the Blaze plan is required for the default bucket, depends on region and current terms.
+- **Header forwarding through Hosting.** The rewrite passes `If-Match`, `If-None-Match` and `ETag` through unchanged and does not cache: responses showed `x-cache: MISS` and `Cache-Control: no-store`.
+- **Request body limit through the rewrite.** A 16 MiB upload through the Hosting rewrite works (`201`); 17 MiB is answered with `413`.
+- **Function address.** A 2nd-generation deploy is reachable at `https://europe-west1-<project-id>.cloudfunctions.net/ucdb` and at `https://ucdb-<hash>-ew.a.run.app` (the latter without a `/ucdb` suffix; see [the variant](#variant-the-function-only-without-hosting)).
+
+Still open; check these against the current Firebase and Google Cloud documentation before relying on them:
+
+- **Least-privilege deploy roles.** The role list in step 2 is broad. The minimum set (in particular for the Artifact Registry cleanup policy, see [above](#first-deploy-the-cleanup-policy), and for the source bucket) is not verified.
+- **Billing and free tier.** Which Cloud Storage, Cloud Functions and Hosting usage stays free depends on region and current terms (new buckets: free tier only in US regions).
 - **Concurrency and memory.** The function is configured with 512 MiB and a concurrency of 4 per instance (at most 2 instances); whether four simultaneous 16 MiB uploads fit into 512 MiB (body, upload copy and buffers) is estimated, not measured. Realistic databases are far smaller (well under a megabyte).
-- **Function address form.** Which of the `cloudfunctions.net` and `run.app` addresses a 2nd-generation function gets, as printed by the deploy.

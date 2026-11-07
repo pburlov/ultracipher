@@ -26,6 +26,8 @@ class FakeBucket {
     this.objects = new Map(); // Pfad -> { bytes, generation }
     this.nextGeneration = 1700000000000000;
     this.calls = 0;
+    this.bucketMissing = false; // Bucket existiert nicht: jeder Zugriff 404
+    this.existsCalls = 0;
     this.failWith = null; // naechster Aufruf wirft diesen Fehler
     this.afterMetadata = null; // Hook zwischen getMetadata und download
   }
@@ -82,7 +84,16 @@ class FakeBucket {
     return file;
   }
 
-  _maybeFail() {
+  // Wie Bucket#exists(): [boolean], wirft bei Fehlern (failWith) auch.
+  async exists() {
+    this.existsCalls++;
+    this._maybeFail({ skipMissing: true });
+    return [!this.bucketMissing];
+  }
+
+  _maybeFail({ skipMissing = false } = {}) {
+    // Fehlender Bucket: dieselbe 404 wie bei einem fehlenden Objekt.
+    if (this.bucketMissing && !skipMissing) throw apiError(404);
     if (this.failWith) {
       const e = this.failWith;
       this.failWith = null;
@@ -158,6 +169,44 @@ test('GET: fehlende Datei -> 404', async () => {
   const res = await call(handler, 'GET', `/${NAME}`);
   assert.equal(res.statusCode, 404);
   assert.equal(res.headers['access-control-expose-headers'], 'ETag');
+});
+
+test('GET: fehlende Datei -> 404, Bucket wird dafuer genau einmal geprueft', async () => {
+  const { handler, bucket, logs } = setup();
+  const res = await call(handler, 'GET', `/${NAME}`);
+  assert.equal(res.statusCode, 404);
+  assert.equal(bucket.existsCalls, 1);
+  assert.deepEqual(logs, []);
+});
+
+test('GET: Normalfall prueft den Bucket nicht', async () => {
+  const { handler, bucket } = setup();
+  await create(handler);
+  assert.equal((await call(handler, 'GET', `/${NAME}`)).statusCode, 200);
+  assert.equal(bucket.existsCalls, 0);
+});
+
+test('GET: fehlender Bucket -> 500 (nicht 404), Log ohne Namen', async () => {
+  const { handler, bucket, logs } = setup();
+  bucket.bucketMissing = true;
+  const res = await call(handler, 'GET', `/${NAME}`);
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(logs, [['ucdb', 'GET', 'bucket-missing']]);
+  assert.ok(!JSON.stringify(logs).includes(NAME));
+  assert.equal(res.headers['cache-control'], 'no-store');
+});
+
+test('GET: Bucket-Pruefung schlaegt selbst fehl -> 500 mit Code im Log', async () => {
+  const { handler, bucket, logs } = setup();
+  bucket.failWith = apiError(404); // getMetadata: 404
+  const original = bucket.exists.bind(bucket);
+  bucket.exists = async () => {
+    bucket.failWith = apiError(503);
+    return original();
+  };
+  const res = await call(handler, 'GET', `/${NAME}`);
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(logs, [['ucdb', 'GET', 503]]);
 });
 
 test('GET: 200 mit Rohbytes, ETag, no-store', async () => {
@@ -320,6 +369,29 @@ test('DELETE: alte Version oder fehlende Datei -> 412', async () => {
   assert.deepEqual(bucket.bytesOf(NAME), bytes('two'));
   const missing = await call(handler, 'DELETE', `/${NAME2}`, { headers: { 'If-Match': '"1"' } });
   assert.equal(missing.statusCode, 412);
+});
+
+test('DELETE: fehlender Bucket -> 500 (nicht 412), Log ohne Namen; fehlende Datei bleibt 412', async () => {
+  const { handler, bucket, logs } = setup();
+  bucket.bucketMissing = true;
+  const res = await call(handler, 'DELETE', `/${NAME}`, { headers: { 'If-Match': '"1"' } });
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(logs, [['ucdb', 'DELETE', 'bucket-missing']]);
+  bucket.bucketMissing = false;
+  logs.length = 0;
+  const missing = await call(handler, 'DELETE', `/${NAME}`, { headers: { 'If-Match': '"1"' } });
+  assert.equal(missing.statusCode, 412);
+  assert.deepEqual(logs, []);
+});
+
+test('PUT: fehlender Bucket (Anlegen und Ersetzen) -> 500, Code 404 geloggt', async () => {
+  for (const headers of [{ 'If-None-Match': '*' }, { 'If-Match': '"1"' }]) {
+    const { handler, bucket, logs } = setup();
+    bucket.bucketMissing = true;
+    const res = await call(handler, 'PUT', `/${NAME}`, { headers, body: bytes('x') });
+    assert.equal(res.statusCode, 500);
+    assert.deepEqual(logs, [['ucdb', 'PUT', 404]]);
+  }
 });
 
 test('DELETE ohne If-Match -> 428, mit ungueltigem ETag -> 412', async () => {
